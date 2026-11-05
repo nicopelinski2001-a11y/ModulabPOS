@@ -138,3 +138,45 @@ test('una respuesta perdida después del commit se recupera sin duplicar la vent
   await page.getByRole('button', { name: 'Ventas', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(2);
 });
+
+test('un JSON 200 incompleto después del commit no descarta el cobro pendiente', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Identificador del comercio').fill('e2e-comercio');
+  await page.getByLabel('Correo electrónico').fill('e2e@test.local');
+  await page.getByLabel('Contraseña', { exact: true }).fill('E2E-Test-Password-2026');
+  await page.getByRole('button', { name: 'Ingresar al sistema' }).click();
+  await expect(page.getByRole('heading', { name: 'Hola, Propietario.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Punto de venta', exact: true }).click();
+  const before = (await (await page.request.get('/api/sales')).json()).length;
+  const field = page.getByRole('textbox', { name: 'Escanear o buscar productos' });
+  await field.fill('7790000000011');
+  await field.press('Enter');
+  await expect(page.locator('.cart-item')).toHaveCount(1);
+  await page.keyboard.press('F8');
+  await expect(page.getByRole('heading', { name: 'Cobrar venta', exact: true })).toBeVisible();
+  await page.route(
+    '**/api/sales',
+    async (route) => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true }),
+      });
+    },
+    { times: 1 },
+  );
+  await page.getByRole('button', { name: 'Confirmar venta', exact: true }).click();
+  await expect(
+    page.getByText('Hay una venta pendiente de confirmar.', { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Venta completada' })).toHaveCount(0);
+  await expect(page.locator('.cart-item')).toHaveCount(1);
+  await page.reload();
+  await page.getByRole('button', { name: 'Reintentar operación', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Venta completada' })).toBeVisible();
+  expect((await (await page.request.get('/api/sales')).json()).length).toBe(before + 1);
+});

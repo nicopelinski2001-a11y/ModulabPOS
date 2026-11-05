@@ -1,7 +1,5 @@
 import { paymentRecorder, fiscalProvider } from '../lib/providers.js';
-import { createPdf } from '../lib/pdf.js';
-import { money, qty } from '../../shared/money.js';
-import { paymentNames } from '../../shared/payments.js';
+import { createReceiptPdf } from '../lib/receipt-pdf.js';
 import { saleTotals } from '../../shared/totals.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -23,7 +21,7 @@ async function saleDetail(db: DB, id: string, user: User) {
   const sale = requireFound(
     (
       await db.query(
-        'SELECT s.*,u.name AS user_name,EXISTS(SELECT 1 FROM sale_returns r WHERE r.sale_id=s.id) AS returned FROM sales s JOIN users u ON u.id=s.user_id WHERE s.id=$1',
+        "SELECT s.*,coalesce(s.receipt_settings->>'operator_name',u.name) AS user_name,EXISTS(SELECT 1 FROM sale_returns r WHERE r.sale_id=s.id) AS returned FROM sales s JOIN users u ON u.id=s.user_id WHERE s.id=$1",
         [id],
       )
     ).rows[0],
@@ -57,9 +55,12 @@ export async function completeSale(db: DB, user: User, b: SaleInput) {
   if (existing) {
     if (existing.request_hash !== requestHash || existing.user_id !== user.user_id)
       throw new AppError(409, 'Esta clave de operación ya se utilizó con otros datos.');
-    return saleDetail(db, existing.id, user);
+    return { ...(await saleDetail(db, existing.id, user)), operation_key: b.idempotency_key };
   }
-  await lockOwnShift(db, user, b.shift_id);
+  const shift = await lockOwnShift(db, user, b.shift_id);
+  const register = requireFound(
+    (await db.query('SELECT name FROM cash_registers WHERE id=$1', [shift.register_id])).rows[0],
+  );
   if (new Set(b.items.map((x) => x.product_id)).size !== b.items.length)
     throw new AppError(400, 'Consolidá las cantidades de productos repetidos.');
   if (new Set(b.payments.map((x) => x.method)).size !== b.payments.length)
@@ -149,7 +150,12 @@ export async function completeSale(db: DB, user: User, b: SaleInput) {
       b.discount_cents,
       total,
       change,
-      JSON.stringify({ ...settings, document: fiscalProvider.issue() }),
+      JSON.stringify({
+        ...settings,
+        register_name: register.name,
+        operator_name: user.name,
+        document: fiscalProvider.issue(),
+      }),
       totals.tax_cents,
     ],
   );
@@ -200,7 +206,7 @@ export async function completeSale(db: DB, user: User, b: SaleInput) {
       );
   }
   await audit(db, user, 'sale.complete', sale.id, { total_cents: total });
-  return saleDetail(db, sale.id, user);
+  return { ...(await saleDetail(db, sale.id, user)), operation_key: b.idempotency_key };
 }
 export async function salesRoutes(app: FastifyInstance) {
   app.post('/api/sales', async (req) => {
@@ -233,33 +239,10 @@ export async function salesRoutes(app: FastifyInstance) {
     const user = auth(req, 'sell');
     const id = uuid.parse((req.params as { id: string }).id);
     const sale = await withUser(user, (db) => saleDetail(db, id, user));
-    const settings = sale.receipt_settings;
-    const rows = [
-      settings.address,
-      settings.tax_id ? `CUIT: ${settings.tax_id}` : '',
-      'TICKET COMERCIAL - NO VÁLIDO COMO FACTURA',
-      `Operación #${sale.number} · ${new Date(sale.created_at).toLocaleString('es-AR', { timeZone: settings.timezone })}`,
-      `Atendió: ${sale.user_name}`,
-      ...(sale.returned ? ['DEVOLUCIÓN TOTAL REGISTRADA'] : []),
-      ...sale.lines.map(
-        (l: { name: string; qty_milli: number; price_cents: number; total_cents: number }) =>
-          `${l.name} · ${qty(l.qty_milli)} x ${money(l.price_cents)} = ${money(l.total_cents)}`,
-      ),
-      `Subtotal: ${money(sale.subtotal_cents)}`,
-      `Descuento: ${money(sale.discount_cents)}`,
-      `TOTAL: ${money(sale.total_cents)}`,
-      `Impuestos incluidos: ${money(sale.tax_cents)}`,
-      ...sale.payments.map(
-        (p: { method: keyof typeof paymentNames; amount_cents: number; status: string }) =>
-          `${paymentNames[p.method]}: ${money(p.amount_cents)}${p.status === 'pending' ? ' (pendiente)' : ''}`,
-      ),
-      `Vuelto: ${money(sale.change_cents)}`,
-      settings.receipt_footer ?? '¡Gracias por tu compra!',
-    ];
     return reply
       .type('application/pdf')
       .header('Content-Disposition', `attachment; filename="ticket-${sale.number}.pdf"`)
-      .send(await createPdf(settings.name, rows));
+      .send(await createReceiptPdf(sale));
   });
   app.get('/api/sales/:id', async (req) => {
     const user = auth(req, 'sell');

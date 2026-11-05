@@ -16,6 +16,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { api, ApiError, notify, useAction } from '../api';
+import { confirmSale } from '../sale-client';
 import { useSession } from '../context';
 import {
   Button,
@@ -209,6 +210,10 @@ export function POS() {
           const saved = saleSchema.safeParse(readStorage(pendingKey, null));
           if (saved.success) body = saved.data;
           else {
+            if (localStorage.getItem(pendingKey))
+              throw new Error(
+                'La venta pendiente guardada no se pudo leer. Conservá este navegador y contactá al administrador para recuperar la clave antes de cobrar.',
+              );
             const stored = readStorage<CartItem[]>(draftKey, []);
             if (!stored.length)
               throw new Error('Este carrito ya fue cobrado o vaciado en otra pestaña.');
@@ -216,7 +221,7 @@ export function POS() {
           // Persist the exact intent BEFORE sending: a lost response must reuse the key and body.
           localStorage.setItem(pendingKey, JSON.stringify(body));
           setPending(body);
-          const result = await api<Sale>('/sales', body);
+          const result = await confirmSale(body, user.user_id);
           localStorage.removeItem(pendingKey);
           localStorage.setItem(draftKey, '[]');
           setPending(null);
@@ -250,7 +255,7 @@ export function POS() {
         }
       }
     },
-    [pendingKey, draftKey, qc],
+    [pendingKey, draftKey, qc, user.user_id],
   );
   const startCheckout = useCallback(async () => {
     if (scansInFlight.current) {
@@ -265,7 +270,19 @@ export function POS() {
       input.current?.focus();
       return;
     }
-    if (!shift) {
+    let readyShift = shift;
+    if (!readyShift) {
+      const refreshed = await shifts.refetch();
+      if (refreshed.error) {
+        notify(
+          'No se pudo consultar la caja. Revisá la conexión al servidor e intentá de nuevo.',
+          'error',
+        );
+        return;
+      }
+      readyShift = refreshed.data?.find((s) => !s.closed_at && s.user_id === user.user_id);
+    }
+    if (!readyShift) {
       notify('Abrí tu caja antes de cobrar.', 'error');
       return;
     }
@@ -278,7 +295,7 @@ export function POS() {
       setCart(updated);
       setCheckout(true);
     }
-  }, [pending, cart, shift, action]);
+  }, [pending, cart, shift, shifts, user.user_id, action]);
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
       if (e.key === 'F2') {
@@ -340,7 +357,7 @@ export function POS() {
               <Pause size={16} /> Suspendidas <Badge>{held.data?.length ?? 0}</Badge>
             </Button>
             <Badge tone={shift ? 'green' : 'amber'}>
-              {shift ? 'Caja abierta' : 'Sin caja abierta'}
+              {shifts.isPending ? 'Consultando caja…' : shift ? 'Caja abierta' : 'Sin caja abierta'}
             </Badge>
           </>
         }

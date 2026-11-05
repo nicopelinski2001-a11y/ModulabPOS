@@ -40,7 +40,7 @@ export function Receipt({
           <p>Operación #{String(sale.number).padStart(6, '0')}</p>
           <p>{dateTime(sale.created_at, settings.timezone)}</p>
           <p>Atendió: {sale.user_name}</p>
-          <p>Caja: {sale.shift_id.slice(0, 8)}</p>
+          <p>Caja: {settings.register_name ?? sale.shift_id.slice(0, 8)}</p>
           {sale.returned && (
             <p>
               <strong>DEVOLUCIÓN TOTAL REGISTRADA</strong>

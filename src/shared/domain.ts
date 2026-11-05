@@ -90,7 +90,18 @@ export type Shift = {
   opened_at: string;
   closed_at: string | null;
 };
+export type ReceiptSettings = Pick<
+  Tenant,
+  'id' | 'name' | 'address' | 'tax_id' | 'timezone' | 'paper_width'
+> & {
+  currency?: 'ARS';
+  tax_rate_bps?: number;
+  receipt_footer?: string;
+  register_name?: string;
+  operator_name?: string;
+};
 export type Sale = {
+  operation_key?: string;
   id: string;
   number: number;
   shift_id: string;
@@ -103,7 +114,7 @@ export type Sale = {
   change_cents: number;
   created_at: string;
   returned: boolean;
-  receipt_settings: Tenant;
+  receipt_settings: ReceiptSettings;
   user_name?: string;
   lines?: Array<{
     product_id: string;
@@ -112,7 +123,7 @@ export type Sale = {
     unit: string;
     qty_milli: number;
     price_cents: number;
-    cost_cents: number;
+    cost_cents?: number;
     total_cents: number;
     tax_rate_bps: number;
     discount_cents: number;
