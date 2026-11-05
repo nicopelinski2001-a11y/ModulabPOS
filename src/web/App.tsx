@@ -26,6 +26,8 @@ import {
 import { api, setCsrf, setNotify, ApiError } from './api';
 import { SessionActivity } from './components/SessionActivity';
 import { ConnectionStatus } from './components/ConnectionStatus';
+import { CommandRecovery } from './components/CommandRecovery';
+import { setCommandUser } from './command-store';
 import { SessionContext } from './context';
 import { Button, Field, Loading, ErrorState } from './components/ui';
 import { can } from '../shared/permissions';
@@ -112,6 +114,7 @@ export function App() {
   const [authEpoch, setAuthEpoch] = useState(0);
   const lock = useCallback(() => {
     setCsrf('');
+    setCommandUser();
     try {
       localStorage.setItem('modulab-local-lock', '1');
     } catch {
@@ -137,6 +140,7 @@ export function App() {
     queryFn: async () => {
       const data = await api<{ user: User; tenant: Tenant; csrf: string }>('/auth/me');
       setCsrf(data.csrf);
+      setCommandUser(data.user);
       return data;
     },
   });
@@ -375,6 +379,7 @@ export function App() {
             </div>
           </header>
           <ConnectionStatus />
+          <CommandRecovery />
           <main key={active.id} className={`main-content ${active.id === 'pos' ? 'pos-main' : ''}`}>
             <Suspense fallback={<Loading />}>{content}</Suspense>
           </main>

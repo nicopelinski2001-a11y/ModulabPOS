@@ -79,6 +79,22 @@ export async function authRoutes(app: FastifyInstance) {
       csrf: csrfToken(req.sessionToken!),
     }));
   });
+  app.get('/api/commands/:key', async (req) => {
+    const user = auth(req);
+    const key = uuid.parse((req.params as { key: string }).key);
+    return withUser(user, async (db) => {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `${user.tenant_id}:command:${key}`,
+      ]);
+      const row = (
+        await db.query('SELECT result FROM commands WHERE idempotency_key=$1 AND user_id=$2', [
+          key,
+          user.user_id,
+        ])
+      ).rows[0];
+      return row ? { ...row.result, operation_key: key } : null;
+    });
+  });
   app.post('/api/auth/activity', async (req) => {
     const user = auth(req);
     await withUser(user, (db) =>

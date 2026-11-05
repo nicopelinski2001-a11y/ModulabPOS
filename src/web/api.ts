@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { commandScope, isDurableCommand, readCommand, writeCommand } from './command-store';
 let csrf = '';
 export const setCsrf = (token: string) => {
   csrf = token;
@@ -17,6 +18,60 @@ export async function api<T = unknown>(
   body?: unknown,
   method = body === undefined ? 'GET' : 'POST',
 ): Promise<T> {
+  const scope = commandScope();
+  const mutate = !['GET', 'HEAD', 'OPTIONS'].includes(method) && !path.startsWith('/auth/');
+  const durable = method === 'POST' && isDurableCommand(path, body);
+  const send = async () => {
+    if (scope && mutate) {
+      let pending;
+      try {
+        pending = readCommand(scope);
+      } catch {
+        throw new Error(
+          'Hay una operación guardada que no se pudo leer. Conservá este navegador y contactá al administrador para recuperar la clave.',
+        );
+      }
+      if (
+        pending &&
+        (pending.path !== path || JSON.stringify(pending.body) !== JSON.stringify(body))
+      )
+        throw new Error('Recuperá la operación pendiente antes de registrar otra operación.');
+      if (path !== '/sales' && localStorage.getItem(`modulab-pending:${scope}`))
+        throw new Error('Recuperá la venta pendiente en Punto de venta antes de continuar.');
+      if (durable) writeCommand(scope, { path, body });
+    }
+    try {
+      const result = await request<T>(path, body, method);
+      if (scope && durable) {
+        if (
+          !result ||
+          typeof result !== 'object' ||
+          !('operation_key' in result) ||
+          result.operation_key !== body.idempotency_key
+        )
+          throw new ApiError(
+            'La confirmación está incompleta. Recuperá la operación pendiente sin volver a cargarla.',
+            502,
+          );
+        writeCommand(scope, null);
+      }
+      return result;
+    } catch (error) {
+      if (
+        scope &&
+        durable &&
+        error instanceof ApiError &&
+        [400, 404, 409, 422].includes(error.status)
+      )
+        writeCommand(scope, null);
+      throw error;
+    }
+  };
+  if (scope && mutate && navigator.locks)
+    return navigator.locks.request(`modulab-command:${scope}`, send);
+  return send();
+}
+async function request<T>(path: string, body: unknown, method: string): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {

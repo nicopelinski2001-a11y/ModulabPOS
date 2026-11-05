@@ -563,6 +563,24 @@ describe('Autenticación operativa y comprobantes', () => {
       await attempt;
     }
   });
+  it('recupera una operación sólo para el operador original y dentro de su comercio', async () => {
+    const key = randomUUID();
+    const body = {
+      shift_id: shiftId,
+      kind: 'in',
+      amount_cents: 1000,
+      reason: 'Recuperación probada',
+      idempotency_key: key,
+    };
+    expect((await get(owner, `/api/commands/${key}`)).json()).toBeNull();
+    const result = await post(owner, '/api/cash/movement', body);
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json().operation_key).toBe(key);
+    expect((await get(owner, `/api/commands/${key}`)).json()).toEqual(result.json());
+    expect((await get(cashier, `/api/commands/${key}`)).json()).toBeNull();
+    expect((await get(other, `/api/commands/${key}`)).json()).toBeNull();
+    expect((await post(owner, '/api/cash/movement', body)).json()).toEqual(result.json());
+  });
   it('admite reingresos legítimos sin acumular intentos fallidos', async () => {
     for (let i = 0; i < 12; i++) {
       const actor = await login('comercio-a', 'owner-a@test.local');

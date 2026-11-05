@@ -139,6 +139,7 @@ test('dos pestañas del mismo operador no cobran dos veces el mismo carrito', as
   const second = await context.newPage();
   await second.goto('/#pos');
   await expect(second.locator('.cart-item')).toHaveCount(1);
+  await expect(second.getByText('Caja abierta', { exact: true })).toBeVisible();
   await second.keyboard.press('F8');
   await expect(second.getByRole('heading', { name: 'Cobrar venta', exact: true })).toBeVisible();
   const before = (await (await page.request.get('/api/sales')).json()).length;
@@ -152,6 +153,44 @@ test('dos pestañas del mismo operador no cobran dos veces el mismo carrito', as
   await expect(page.locator('.cart-item')).toHaveCount(0);
   await expect(second.locator('.cart-item')).toHaveCount(0);
   expect((await (await page.request.get('/api/sales')).json()).length).toBe(before + 1);
+});
+test('un ingreso de caja con respuesta perdida se recupera tras recargar sin duplicarse', async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole('button', { name: 'Caja y turnos', exact: true }).click();
+  const shifts = await (await page.request.get('/api/cash/shifts')).json();
+  const shift = shifts.find((s: { closed_at: string | null }) => !s.closed_at);
+  const before = await (await page.request.get(`/api/cash/shifts/${shift.id}/movements`)).json();
+  await page.getByRole('button', { name: 'Ingresar efectivo', exact: true }).click();
+  await page.getByLabel('Importe (ARS)').fill('100');
+  await page.getByLabel('Motivo', { exact: true }).fill('Ingreso con respuesta perdida');
+  await page.route(
+    '**/api/cash/movement',
+    async (route) => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      await route.abort('failed');
+    },
+    { times: 1 },
+  );
+  await page.getByRole('button', { name: 'Registrar ingreso', exact: true }).click();
+  await expect(
+    page.getByText('No se pudo conectar con el servidor local.', { exact: false }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByText('Hay una operación pendiente de recuperar.', { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Recuperar operación', exact: true }).click();
+  await expect(
+    page.getByText('Hay una operación pendiente de recuperar.', { exact: true }),
+  ).toHaveCount(0);
+  const after = await (await page.request.get(`/api/cash/shifts/${shift.id}/movements`)).json();
+  expect(after.length).toBe(before.length + 1);
+  expect(
+    after.filter((m: { reason: string }) => m.reason === 'Ingreso con respuesta perdida'),
+  ).toHaveLength(1);
 });
 test('escaneos rápidos conservan todas las unidades aunque el servidor responda lento', async ({
   page,

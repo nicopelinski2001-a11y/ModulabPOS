@@ -18,12 +18,12 @@ export async function command<T>(
   if (old) {
     if (old.kind !== kind || old.request_hash !== hash || old.user_id !== user.user_id)
       throw new AppError(409, 'La clave de reintento tiene otros datos.');
-    return old.result as T;
+    return { ...old.result, operation_key: key } as T;
   }
   const result = await fn();
   await db.query(
     'INSERT INTO commands(tenant_id,user_id,idempotency_key,kind,request_hash,result) VALUES($1,$2,$3,$4,$5,$6)',
     [user.tenant_id, user.user_id, key, kind, hash, JSON.stringify(result)],
   );
-  return result;
+  return { ...result, operation_key: key };
 }
