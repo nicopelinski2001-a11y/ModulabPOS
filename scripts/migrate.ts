@@ -101,7 +101,7 @@ try {
     'GRANT UPDATE ON customers,suppliers,cash_shifts,purchases,users TO modulab_app; GRANT UPDATE(last_active_at) ON sessions TO modulab_app; GRANT DELETE ON sessions,held_sales TO modulab_app',
   );
   await db.query(
-    'GRANT EXECUTE ON FUNCTION auth_lookup(text,text),session_lookup(text),login_gate(text) TO modulab_app',
+    'GRANT EXECUTE ON FUNCTION auth_lookup(text,text),session_lookup(text),login_gate(text),login_succeeded(text) TO modulab_app',
   );
   console.log('Migraciones y permisos listos.');
 } finally {

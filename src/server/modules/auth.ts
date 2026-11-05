@@ -11,7 +11,7 @@ const fallbackHash = await hashPassword(randomBytes(32).toString('hex'));
 export async function authRoutes(app: FastifyInstance) {
   app.post(
     '/api/auth/login',
-    { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } },
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const body = z
         .object({
@@ -40,6 +40,13 @@ export async function authRoutes(app: FastifyInstance) {
       }
       const token = randomBytes(32).toString('hex');
       await transaction(found.tenant_id, found.user_id, async (db) => {
+        await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [found.user_id]);
+        const current = (
+          await db.query('SELECT * FROM auth_lookup($1,$2)', [body.tenant, body.email])
+        ).rows[0];
+        if (!current?.active || current.password_hash !== found.password_hash)
+          throw new AppError(401, 'El acceso cambió durante el ingreso. Volvé a ingresar.');
+        await db.query('SELECT login_succeeded($1)', [accountKey]);
         await db.query('DELETE FROM sessions WHERE expires_at<now()');
         await db.query(
           "INSERT INTO sessions(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '8 hours')",
@@ -111,6 +118,11 @@ export async function authRoutes(app: FastifyInstance) {
         throw new AppError(403, 'La contraseña actual es incorrecta.');
       const hash = await hashPassword(b.new_password);
       await withUser(user, async (db) => {
+        await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.user_id]);
+        const current = (await db.query('SELECT * FROM auth_lookup($1,$2)', [slug, user.email]))
+          .rows[0];
+        if (!current || current.password_hash !== found.password_hash)
+          throw new AppError(409, 'La contraseña cambió durante esta operación. Volvé a ingresar.');
         await db.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, user.user_id]);
         await db.query('DELETE FROM sessions WHERE user_id=$1 AND id<>$2', [
           user.user_id,

@@ -1,9 +1,12 @@
 import { beforeAll, afterAll, describe, it, expect } from 'vitest';
 import pg from 'pg';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createTenant } from '../../scripts/create-tenant';
 import { buildApp } from '../../src/server/app';
 import { pool, assertDatabaseRole, transaction } from '../../src/server/lib/db';
+import { hashPassword } from '../../src/server/lib/password';
 import type { FastifyInstance } from 'fastify';
 let app: FastifyInstance;
 let admin: pg.Client;
@@ -483,6 +486,124 @@ describe('Operación de kiosco completa', () => {
     );
     expect((await get(actor, '/api/products')).statusCode).toBe(401);
     expect((await post(actor, '/api/auth/activity', {})).statusCode).toBe(401);
+  });
+});
+describe('Autenticación operativa y comprobantes', () => {
+  it('el reset administrativo revoca sesiones y libera el bloqueo de intentos', async () => {
+    const email = 'reset-access@test.local';
+    expect(
+      (
+        await post(owner, '/api/users', {
+          name: 'Acceso recuperado',
+          email,
+          password,
+          role: 'cashier',
+        })
+      ).statusCode,
+    ).toBe(200);
+    const actor = await login('comercio-a', email);
+    const key = createHash('sha256').update(`comercio-a:${email}`).digest('hex');
+    await pool.query('SELECT login_gate($1) FROM generate_series(1,10)', [key]);
+    const signIn = (value: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { origin: 'http://localhost:5173', 'x-requested-with': 'ModulabPOS' },
+        payload: { tenant: 'comercio-a', email, password: value },
+      });
+    expect((await signIn(password)).statusCode).toBe(429);
+    const replacement = 'Recovered-Access-Password-2026';
+    await promisify(execFile)(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'scripts/reset-password.ts', 'comercio-a', email],
+      { env: { ...process.env, NEW_PASSWORD: replacement } },
+    );
+    expect((await get(actor, '/api/products')).statusCode).toBe(401);
+    expect((await signIn(password)).statusCode).toBe(401);
+    expect((await signIn(replacement)).statusCode).toBe(200);
+  });
+  it('un reset simultáneo impide crear una sesión con la contraseña anterior', async () => {
+    const created = await post(owner, '/api/users', {
+      name: 'Acceso concurrente',
+      email: 'race@test.local',
+      password,
+      role: 'cashier',
+    });
+    expect(created.statusCode).toBe(200);
+    const hash = await hashPassword('A-New-Secure-Password-2026');
+    await admin.query('BEGIN');
+    let attempt;
+    try {
+      await admin.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [created.json().id]);
+      attempt = app
+        .inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          headers: { origin: 'http://localhost:5173', 'x-requested-with': 'ModulabPOS' },
+          payload: { tenant: 'comercio-a', email: 'race@test.local', password },
+        })
+        .then((r) => r);
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const state = await pool.query(
+          "SELECT 1 FROM pg_stat_activity WHERE usename='modulab_app' AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM users%FOR UPDATE'",
+        );
+        if (state.rowCount) {
+          waiting = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(waiting).toBe(true);
+      await admin.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, created.json().id]);
+      await admin.query('COMMIT');
+      expect((await attempt).statusCode).toBe(401);
+    } finally {
+      await admin.query('ROLLBACK');
+      await attempt;
+    }
+  });
+  it('admite reingresos legítimos sin acumular intentos fallidos', async () => {
+    for (let i = 0; i < 12; i++) {
+      const actor = await login('comercio-a', 'owner-a@test.local');
+      expect((await post(actor, '/api/auth/logout', {})).statusCode).toBe(200);
+    }
+  });
+  it('mantiene el bloqueo por intentos fallidos consecutivos de una cuenta', async () => {
+    for (let i = 0; i < 11; i++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        remoteAddress: '127.0.0.11',
+        headers: { origin: 'http://localhost:5173', 'x-requested-with': 'ModulabPOS' },
+        payload: {
+          tenant: 'comercio-b',
+          email: 'unknown@test.local',
+          password: 'incorrect-password',
+        },
+      });
+      expect(response.statusCode, response.body).toBe(i < 10 ? 401 : 429);
+    }
+  });
+  it('guarda caja/empleado en el ticket y preserva 58 mm tras cambiar la configuración', async () => {
+    const p = await makeProduct(owner, 'PDF-SNAPSHOT', 2000, 12100);
+    await transaction(owner.tenant_id, owner.user_id, (db) =>
+      db.query('UPDATE tenants SET paper_width=58'),
+    );
+    const response = await post(owner, '/api/sales', saleBody(p.id, shiftId, 12100));
+    expect(response.statusCode, response.body).toBe(200);
+    const receipt = response.json();
+    expect(receipt.operation_key).toBeTruthy();
+    expect(receipt.receipt_settings.register_name).toBeTruthy();
+    expect(receipt.receipt_settings.operator_name).toBeTruthy();
+    await transaction(owner.tenant_id, owner.user_id, (db) =>
+      db.query('UPDATE tenants SET paper_width=80'),
+    );
+    const pdf = await get(owner, `/api/sales/${receipt.id}/ticket.pdf`);
+    expect(pdf.statusCode, pdf.body).toBe(200);
+    expect(pdf.headers['content-type']).toContain('application/pdf');
+    const box = pdf.rawPayload.toString('latin1').match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)/);
+    expect(Number(box?.[1])).toBeCloseTo((58 * 72) / 25.4, 3);
   });
 });
 describe('Compras, cuentas y cierre', () => {

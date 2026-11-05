@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { hashPassword } from '../src/server/lib/password.js';
 const input = z
   .object({
@@ -29,6 +30,10 @@ try {
   await db.query("SELECT set_config('app.tenant_id',$1,true)", [account.tenant_id]);
   await db.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, account.id]);
   await db.query('DELETE FROM sessions WHERE user_id=$1', [account.id]);
+  const accountKey = createHash('sha256')
+    .update(`${input.slug}:${input.email.toLowerCase()}`)
+    .digest('hex');
+  await db.query('SELECT login_succeeded($1)', [accountKey]);
   await db.query(
     "INSERT INTO audit_events(tenant_id,user_id,action,entity_id) VALUES($1,NULL,'user.password_reset',$2)",
     [account.tenant_id, account.id],
