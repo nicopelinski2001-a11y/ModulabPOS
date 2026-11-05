@@ -10,7 +10,7 @@
     "dev": "concurrently -k -n api,web 'npm:dev:api' 'npm:dev:web'",
     "dev:api": "tsx watch --env-file-if-exists=.env src/server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "npm run typecheck && vite build && tsc -p tsconfig.server.json",
+    "build": "npm run typecheck && node scripts/build-web.mjs && tsc -p tsconfig.server.json",
     "start": "node --env-file-if-exists=.env dist/server/server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "db:migrate": "tsx --env-file-if-exists=.env scripts/migrate.ts",
@@ -31,7 +31,8 @@
     "verify": "npm run check && npm run build && npm run test:integration && npm run test:e2e",
     "kiosk:start": "node scripts/kiosk-start.mjs",
     "user:reset-password": "tsx --env-file-if-exists=.env scripts/reset-password.ts",
-    "service:install": "tsx scripts/install-service.ts"
+    "service:install": "tsx scripts/install-service.ts",
+    "test:container": "tsx scripts/container-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

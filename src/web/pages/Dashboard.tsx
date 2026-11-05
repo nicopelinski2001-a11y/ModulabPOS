@@ -285,6 +285,7 @@ export function Dashboard({ reports = false }: { reports?: boolean }) {
                           }}
                         />
                         <Area
+                          isAnimationActive={false}
                           type="monotone"
                           dataKey="net_cents"
                           name="Ventas netas"

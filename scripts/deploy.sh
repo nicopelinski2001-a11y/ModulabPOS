@@ -7,15 +7,16 @@ if [[ ! -f "$config_file" ]]; then
   exit 1
 fi
 docker compose --env-file "$config_file" --profile https config --quiet
-# Backup before schema changes. Initial installs do not yet have a database to copy.
+docker compose --env-file "$config_file" --profile https build
+# Stop writers before the final pre-migration snapshot: a slow build must not
+# leave subsequent sales outside the recovery point.
+docker compose --env-file "$config_file" stop app
+# Initial installs do not yet have a database to copy.
 if docker compose --env-file "$config_file" ps --status running --services | grep -qx db; then
   docker compose --env-file "$config_file" exec -T db bash -c 'PGPASSWORD="$POSTGRES_PASSWORD" PGHOST=127.0.0.1 PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB" BACKUP_DIR=/tmp/predeploy bash -s' < scripts/backup.sh
   mkdir -p backups/predeploy
   docker compose --env-file "$config_file" cp db:/tmp/predeploy/. backups/predeploy/
 fi
-docker compose --env-file "$config_file" --profile https build
-# Stop writers before migration; never run a new schema under the previous binary.
-docker compose --env-file "$config_file" stop app
 docker compose --env-file "$config_file" up -d db
 docker compose --env-file "$config_file" run --rm migrate
 docker compose --env-file "$config_file" --profile https up -d --wait

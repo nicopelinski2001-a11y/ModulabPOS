@@ -13,7 +13,7 @@ jobs:
           POSTGRES_PASSWORD: ci-admin-password-only
           POSTGRES_DB: modulab_ci
         ports: ['5432:5432']
-        options: --health-cmd "pg_isready -U modulab_admin -d modulab_ci" --health-interval 5s --health-timeout 5s --health-retries 15
+        options: --health-cmd "pg_isready -h 127.0.0.1 -U modulab_admin -d modulab_ci" --health-interval 5s --health-timeout 5s --health-retries 15
     env:
       ADMIN_DATABASE_URL: postgresql://modulab_admin:ci-admin-password-only@localhost:5432/modulab_ci
       DATABASE_URL: postgresql://modulab_app:ci-app-password-only@localhost:5432/modulab_ci
@@ -35,10 +35,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - run: npm audit --audit-level=moderate
-      - run: |
-          npm run backup
-          backup_file="$(find backups -maxdepth 1 -name '*.dump' -type f | sort | tail -n 1)"
-          npm run backup:verify -- "$backup_file"
+      # Uses PostgreSQL 18 clients from its image; runner clients may be older.
+      - run: npm run test:container
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
