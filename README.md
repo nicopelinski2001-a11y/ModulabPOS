@@ -8,11 +8,11 @@ POS local para kioscos pequeños y medianos: React + TypeScript, Fastify y Postg
 
 La auditoría completó los flujos de venta, descuentos e impuestos incluidos; efectivo con vuelto, tarjetas, QR/billetera, transferencia y pagos combinados; devolución total; productos, categorías, códigos, stock y alertas; apertura, movimientos, arqueo y cierre. Se reforzó la integridad también en PostgreSQL, el reintento de cobros, la coordinación entre pestañas y el bloqueo por inactividad.
 
-**Verificación:** 16 tests unitarios, 26 de integración y 7 E2E aprobados (49 en total), lint/formato/tipos/build correctos y `npm audit` sin vulnerabilidades.
+**Verificación:** 27 tests unitarios, 32 de integración y 9 E2E aprobados (68 en total), lint/formato/tipos/build correctos y `npm audit` sin vulnerabilidades.
 
-Se incorporaron PDF descargables de tickets, reportes y arqueos, CSV seguro, conciliación manual de pagos pendientes con evidencia, recuperación de acceso por CLI, instalador local, arranque del kiosco, servicios de usuario con backup diario, despliegue Docker y paquete de distribución sin secretos. Las comprobaciones y sus límites están en [docs/VERIFICACION.md](docs/VERIFICACION.md).
+Se incorporaron PDF térmicos reales de 58/80 mm para tickets y PDF A4 de reportes y arqueos, CSV seguro, conciliación manual de pagos pendientes con evidencia, recuperación de acceso por CLI, instalador local, arranque del kiosco, servicios de usuario con backup diario, despliegue Docker y paquete de distribución sin secretos. Las comprobaciones y sus límites están en [docs/VERIFICACION.md](docs/VERIFICACION.md).
 
-La validación física de impresoras y la ejecución de Docker requieren esos entornos. Acreditar o reintegrar dinero electrónico se hace en el banco/proveedor del comercio; la integración automática y la facturación fiscal requieren un proveedor implementado y credenciales autorizadas. Los adaptadores locales funcionan sin esos servicios y nunca simulan autorizaciones.
+Las imágenes de instalación se construyeron y probaron con Podman rootless. La validación de impresoras, Docker Compose con su proxy HTTPS y Windows requiere esos entornos de destino. Acreditar o reintegrar dinero electrónico se hace en el banco/proveedor del comercio; la integración automática y la facturación fiscal requieren un proveedor implementado y credenciales autorizadas. Los adaptadores locales funcionan sin esos servicios y nunca simulan autorizaciones.
 
 ## Instalación rápida en una computadora Linux
 
@@ -24,7 +24,7 @@ npm run setup
 npm run kiosk:start
 ```
 
-El setup de una instalación nueva genera secretos aleatorios y archivos privados, inicializa PostgreSQL en `.local/pgdata`, enlazado a `127.0.0.1:55438`, aplica las seis migraciones, crea el comercio `mi-kiosco` con dos cajas y compila la aplicación. Abrir **http://localhost:3001**. Las credenciales del propietario están en `.local/installation.json`, con permisos 600; no se imprimen en consola ni se incluyen en Git/paquetes.
+El setup de una instalación nueva genera secretos aleatorios y archivos privados, inicializa PostgreSQL en `.local/pgdata`, enlazado a `127.0.0.1:55438`, aplica las siete migraciones, crea el comercio `mi-kiosco` con dos cajas y compila la aplicación. Abrir **http://localhost:3001**. Las credenciales del propietario están en `.local/installation.json`, con permisos 600; no se imprimen en consola ni se incluyen en Git/paquetes.
 
 Para personalizar el alta, establecer `SHOP_SLUG`, `SHOP_NAME` y `OWNER_EMAIL` antes de ejecutar setup. `OWNER_PASSWORD` permite suministrar una contraseña de al menos 12 caracteres desde un gestor de secretos; si falta, se genera. `SETUP_PG_PORT` cambia el puerto de la base local en una instalación nueva. Si `.env` ya existe, se respeta y se migra/compila la instalación configurada; el script no reemplaza sus secretos ni crea un comercio real sobre esa base.
 
@@ -108,6 +108,10 @@ Atajos: **F2** búsqueda, **Enter** escaneo, **F8** cobro y **Escape** cierre de
 
 Los ingresos/retiros requieren motivo. Un retiro, pago o devolución en efectivo no puede superar el efectivo registrado: revisar el saldo o registrar un ingreso real. No se reabre ni edita un turno cerrado. El backend permite cierre administrativo autorizado mediante `/api/cash/close`.
 
+Los ingresos/retiros, aperturas, cobranzas, pagos a proveedores, ajustes de stock y aumentos de precios se guardan antes del envío. Si aparece **Hay una operación pendiente de recuperar**, usar **Recuperar operación**, incluso después de recargar o volver a ingresar. Primero se consulta el resultado confirmado del mismo operador; si no existe, se reenvían los datos originales con su UUID. Mientras tanto se bloquean otras modificaciones. No volver a cargar el movimiento con otra clave ni borrar datos del navegador.
+
+Una respuesta HTTP 200 incompleta tampoco confirma un cobro: el cliente verifica clave de operación, operador, renglones, pagos, impuestos, descuento y vuelto antes de liberar el carrito.
+
 ### Roles y recuperación de acceso
 
 | Rol                     | Facultades                                                                       |
@@ -126,7 +130,7 @@ Si el propietario pierde la contraseña, un administrador **del equipo/base**, c
 npm run user:reset-password -- mi-kiosco propietario@comercio.com
 ```
 
-Esto exige `NEW_PASSWORD`, usa `ADMIN_DATABASE_URL`, revoca sesiones y deja auditoría. No reactiva usuarios deshabilitados ni cambia sus roles.
+Esto exige `NEW_PASSWORD`, usa `ADMIN_DATABASE_URL`, revoca sesiones, libera el bloqueo por intentos fallidos y deja auditoría. El login admite 30 solicitudes por IP/minuto y hasta 10 intentos fallidos consecutivos por cuenta en 15 minutos; un ingreso válido reinicia el contador de cuenta. Los cambios concurrentes de contraseña/acceso se comprueban bajo bloqueo antes de crear una sesión. No reactiva usuarios deshabilitados ni cambia sus roles.
 
 ## Reportes y exportación
 
@@ -168,7 +172,7 @@ docker compose --env-file .env.docker run --rm -e OWNER_PASSWORD migrate \
   scripts/create-tenant.ts mi-kiosco 'Mi Kiosco' propietario@comercio.com
 ```
 
-El script valida Compose, conserva un backup antes de actualizar, compila imágenes, detiene escritores, migra y levanta base/app/backup/proxy HTTPS. La cuenta administradora no llega al contenedor runtime. Una migración fallida deja la aplicación detenida y los datos disponibles para diagnóstico; no se deshacen migraciones automáticamente. El proxy Caddy requiere DNS/puertos/certificado de la instalación. No ejecutar seed en producción.
+El script valida Compose, compila imágenes, detiene escritores, guarda el backup final previo a la migración, migra y levanta base/app/backup/proxy HTTPS. La cuenta administradora no llega al contenedor runtime. Una migración fallida deja la aplicación detenida y los datos disponibles para diagnóstico; no se deshacen migraciones automáticamente. El proxy Caddy requiere DNS/puertos/certificado de la instalación. No ejecutar seed en producción.
 
 ## Verificación reproducible
 
@@ -185,7 +189,13 @@ npm run test:e2e
 npm audit
 npm run backup
 npm run backup:verify -- backups/archivo.dump
+# Prueba aislada de las imágenes; requiere Docker o Podman:
+npm run test:container
+# Alternativa comprobada en este equipo:
+CONTAINER_ENGINE=podman npm run test:container
 ```
+
+La prueba de contenedores genera credenciales temporales, una red y una base separadas, compila tooling/runtime, aplica migraciones dos veces y ejecuta login, cinco medios, mixto, reintento, PDF, devolución, cierre, reportes y backup/restauración. Elimina sus contenedores, volúmenes, red y credenciales al terminar; conserva imágenes/cache de build. No lee `.env` ni usa la base del comercio. `CONTAINER_SMOKE_PORT` cambia el puerto local 3181. No comprueba el dominio/certificado del proxy ni Windows.
 
 `npm run verify` reúne lint, formato, tipos, unitarios, build, integración y E2E. Integración/E2E necesitan un administrador PostgreSQL con permiso de crear bases y `APP_DATABASE_PASSWORD`/`DATABASE_URL` coherentes. Chromium requiere sus dependencias del SO (`npx playwright install --with-deps chromium` en un host de CI nuevo). Las capturas y trazas se guardan en `test-results/`. Hay CI en `.github/workflows/ci.yml`.
 
@@ -196,6 +206,7 @@ npm run backup:verify -- backups/archivo.dump
 | No inicia sesión o aparece error de origen | Verificar `APP_ORIGIN` exacto: protocolo, hostname y puerto. No intercambiar localhost/127.0.0.1 en el navegador      |
 | PostgreSQL no conecta                      | Comprobar puerto, servicio, disco libre y `.env`; iniciar la base local con `kiosk:start` si fue creada por setup     |
 | HTTPS/cookies no funcionan en LAN          | Instalar certificado confiable, configurar proxy y origen HTTPS; `HOST=0.0.0.0` no habilita HTTP de producción        |
+| Operación pendiente de caja/stock          | Pulsar Recuperar operación con el mismo usuario; no repetir el movimiento con una clave nueva ni limpiar el navegador |
 | Venta pendiente tras un corte              | Volver al POS con el mismo usuario y pulsar Reintentar; conservar almacenamiento del navegador                        |
 | Stock insuficiente                         | Revisar cantidad y movimientos; cargar ingreso/ajuste real, no modificar saldos por SQL                               |
 | Efectivo insuficiente                      | Revisar fondo, ingresos, retiros y devoluciones; registrar un ingreso real si corresponde                             |
@@ -216,8 +227,10 @@ npm run backup:verify -- backups/archivo.dump
 - La anulación de una venta confirmada se registra como devolución total. El carrito sin confirmar puede vaciarse. Devolución total con motivo, permiso y reposición completa, sin borrar la venta original. Para mercadería dañada se registra después una merma con ajuste de inventario. Los reintegros electrónicos se hacen en el proveedor original. No se implementan devoluciones parciales.
 - Apertura/cierre definitivos por turno y empleado. Se rechazan egresos que producirían efectivo negativo; no hay reapertura ni modificación de libros contables. Las correcciones se registran como movimientos compensatorios.
 - Carrito/intención por comercio y usuario, con UUID persistido antes de cobrar y coordinación entre pestañas del mismo perfil. Los reintentos utilizan exactamente los datos guardados. No se confirman ventas sin el servidor; no eliminar datos del navegador en medio de una recuperación.
+- También se conserva la intención completa de comandos de caja, stock, cobranzas y precios. La consulta de recuperación se restringe al operador/comercio original y espera cualquier commit concurrente. Un dato local corrupto impide sobrescribir su clave: requiere revisar historial con el administrador.
+- Se preservaron la base y las credenciales de evaluación existentes; una instalación comercial nueva genera sus propios secretos y propietario, con contraseñas de al menos 12 caracteres.
 - Bloqueo tras 15 minutos sin entrada real, configurable; TTL absoluto de 8 horas. Polling de salud/reportes no extiende sesión. La reautenticación conserva el borrador. Sin dependencia de correo para recuperar acceso: CLI privilegiada y auditada.
-- Impresión mediante driver/navegador, 58/80 mm, con PDF descargable como fallback. Sin impresión silenciosa ni ESC/POS directo: requieren un agente/driver específico de hardware.
+- Impresión mediante driver/navegador, 58/80 mm, con PDF descargable del mismo ancho y altura según contenido (paginación a un metro). Los reportes permanecen A4. Caja y operador se conservan en el snapshot del ticket, aunque cambien sus nombres después. Sin impresión silenciosa ni ESC/POS directo: requieren un agente/driver específico de hardware.
 - HTTP sólo en loopback para el kiosco individual; HTTPS para LAN. Instalación Linux nativa y distribución Docker. Windows nativo y otras arquitecturas requieren un piloto de su plataforma.
 - Se conserva copia antes de migrar; migraciones versionadas e inmutables, sin rollback automático destructivo. Backups sin vencimiento por defecto; retención optativa mínima de siete días y copia externa a cargo de la instalación.
 - TypeScript 6.0 se usa para compatibilidad declarada con el parser ESLint. `minimatch` se fija a una versión corregida mediante override; lint y tests comprueban la resolución. `npm audit` se ejecuta sobre todo el árbol.
@@ -230,9 +243,9 @@ npm run backup:verify -- backups/archivo.dump
 | ✅     | Venta completa: escaneo/búsqueda, carrito, cantidades/peso, descuentos, impuestos, vuelto, efectivo/tarjetas/QR/transferencia/mixto, ticket y devolución total                                  |
 | ✅     | Catálogo, categorías, códigos, precios, alta/edición/desactivación, inventario automático, movimientos y alertas                                                                                |
 | ✅     | Apertura, ingresos/egresos, arqueo, diferencia y cierre, con reportes CSV/PDF                                                                                                                   |
-| ✅     | Transacciones atómicas, bloqueos, claves idempotentes, restricciones diferidas, libros inmutables, seis migraciones e índices                                                                   |
+| ✅     | Transacciones atómicas, bloqueos, claves idempotentes, restricciones diferidas, libros inmutables, siete migraciones e índices                                                                  |
 | ✅     | Login, roles, CSRF, RLS, contraseñas seguras, expiración/inactividad y recuperación administrativa                                                                                              |
-| ✅     | Errores globales, logging, recuperación de interfaz, carrito persistente, indicador de conexión y recuperación de respuesta perdida                                                             |
+| ✅     | Errores globales, logging, recuperación de interfaz, carrito/comandos persistentes, validación de confirmaciones, indicador de conexión y recuperación de respuesta perdida                     |
 | ✅     | Operación sin internet manteniendo servidor/LAN; ninguna dependencia externa para vender manualmente                                                                                            |
 | ✅     | Validaciones, lint, tipos, unitarios, integración PostgreSQL, E2E y smoke de medios/devolución/cierre/reporte                                                                                   |
 | ✅     | Reportes por período, top de productos, exportaciones CSV/PDF, datos históricos de impuestos y pagos pendientes conciliables                                                                    |
@@ -240,7 +253,8 @@ npm run backup:verify -- backups/archivo.dump
 | ✅     | Instalador, demo separado, arranque, servicios y backup diario, empaquetado con checksum, script de deploy y documentación                                                                      |
 | ✅     | Backups con checksum y restauración de verificación en una base aislada                                                                                                                         |
 | ⚠️     | Impresora física: instalar driver, seleccionar papel y realizar prueba en el equipo de destino; fallback PDF disponible                                                                         |
-| ⚠️     | Despliegue Docker/Windows: validar en un host con Docker; dominio, DNS, puertos y confianza HTTPS se configuran allí                                                                            |
+| ✅     | Imágenes tooling/runtime comprobadas con Podman rootless, red aislada, usuario sin privilegios y filesystem de sólo lectura                                                                     |
+| ⚠️     | Docker Compose/proxy HTTPS y Windows: validar en destino; configurar dominio, DNS, puertos y confianza del certificado                                                                          |
 | ⚠️     | Backup fuera del equipo: configurar destino seguro y probar restauración periódica; proteger `.env` por separado                                                                                |
 | ⚠️     | Pagos automáticos/facturación fiscal: los modos actuales son manual/comercial. Requieren proveedor implementado, credenciales del titular y homologación; no se emiten autorizaciones ficticias |
 | ❌     | Sincronización entre bases independientes: no aplica a la arquitectura local centralizada; la pérdida de LAN conserva borradores pero impide confirmar                                          |

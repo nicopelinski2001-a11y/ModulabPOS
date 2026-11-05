@@ -26,7 +26,7 @@ Cada operación reserva una conexión del pool, ejecuta `BEGIN`, establece `app.
 
 El rol `modulab_app` no posee tablas, no es superusuario y no tiene BYPASSRLS. El servidor comprueba esto al arrancar. No puede editar el saldo de stock ni modificar/borrar libros financieros. La cuenta administradora/migradora no se entrega al proceso runtime.
 
-Las funciones `auth_lookup`, `session_lookup` y `login_gate` resuelven el arranque de autenticación mediante `SECURITY DEFINER` con `search_path` fijado, tablas calificadas y permisos públicos revocados. Se concede al runtime únicamente ejecución de estas tres funciones. `apply_inventory` es un trigger definidor que modifica sólo la proyección de stock del tenant actual. Su propietario necesita BYPASSRLS (el administrador de instalación utilizado en esta distribución es superusuario). Proteger esa identidad es una condición de despliegue.
+Las funciones `auth_lookup`, `session_lookup`, `login_gate` y `login_succeeded` resuelven el arranque de autenticación mediante `SECURITY DEFINER` con `search_path` fijado, tablas calificadas y permisos públicos revocados. Se concede al runtime únicamente ejecución de estas cuatro funciones. `apply_inventory` es un trigger definidor que modifica sólo la proyección de stock del tenant actual. Su propietario necesita BYPASSRLS (el administrador de instalación utilizado en esta distribución es superusuario). Proteger esa identidad es una condición de despliegue.
 
 RLS protege frente a consultas de aplicación que omitan filtros; no protege frente a un atacante que controle el servidor y sus credenciales y pueda establecer cualquier contexto. Los administradores de la base/host son identidades confiables. No hay cuenta de superadmin SaaS con acceso implícito a los comercios desde la API.
 
@@ -55,11 +55,13 @@ Los bloqueos de turno serializan caja/venta/cierre de un mismo empleado. Distint
 
 ## Reintentos y recuperación del navegador
 
-El POS guarda el carrito y, **antes** de enviar una venta, su intención completa y UUID en almacenamiento local con clave por comercio/usuario. Mientras el resultado es ambiguo no permite editar esa intención. Un reintento, incluso tras recargar, envía exactamente el mismo contenido. La base responde con la operación confirmada si ya existía. Playwright comprueba el caso en que el servidor confirma y se descarta la respuesta.
+El POS guarda el carrito y, **antes** de enviar una venta, su intención completa y UUID en almacenamiento local con clave por comercio/usuario. Mientras el resultado es ambiguo no permite editar esa intención. Un reintento, incluso tras recargar, envía exactamente el mismo contenido. La base responde con la operación confirmada si ya existía. Playwright comprueba el caso en que el servidor confirma y se descarta la respuesta, y un 200 con JSON incompleto. El cliente sólo libera la intención después de validar el recibo contra UUID, operador, cantidades, pagos e importes guardados.
 
 Estos datos son borradores operativos, no secretos de autenticación ni una base contable. Los historiales confirmados están en PostgreSQL. Borrar el almacenamiento del navegador durante una operación ambigua destruye la clave local de recuperación: primero se debe verificar el historial en el servidor. No se promete recuperación si se pierde a la vez todo el disco local y el servidor sin backup.
 
 Recepciones y devoluciones totales son idempotentes por compra/venta. Ajustes, ingresos/retiros y cobranzas usan claves únicas; aumentos masivos almacenan comando, hash y resultado para no aplicar dos veces un porcentaje. Alta de productos y compras se protegen además con SKU/código y referencia de proveedor únicos.
+
+Los comandos con UUID de caja, cobros, pagos a proveedores, ajustes y precios se guardan también en el navegador antes de enviar. El servidor devuelve `operation_key` en el resultado nuevo o repetido. Un resultado ambiguo conserva la intención y bloquea otras modificaciones. La recuperación usa `GET /api/commands/:key`, con filtro de operador y RLS, bajo el mismo bloqueo asesor del comando. Recuperar un resultado ya confirmado no depende de que el usuario conserve el permiso de crear otra operación. Sólo si no existe se reenvía el comando original.
 
 ## Libros y correcciones
 

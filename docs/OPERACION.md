@@ -39,7 +39,7 @@ La opción implementada es un **servidor local compartido**: PostgreSQL + Node e
 
 Windows puede usar Docker Desktop con WSL2 en un equipo compatible, o Node 24 y PostgreSQL instalados como servicios con cuentas restringidas. El instalador y el servicio/timer incluidos se dirigen a Linux. Windows usa Docker Desktop con WSL2 o instalación administrada; no se incluyen un MSI firmado, servicio Windows nativo ni agente Tauri. Validar consumo de recursos en el hardware del cliente. Recomendada una UPS para el servidor y una política de backup fuera del disco principal.
 
-Si se corta la LAN, se apaga el servidor o la caja no puede alcanzarlo, **no se confirma una venta nueva**. El carrito se conserva en el navegador y la pantalla informa la falta de conexión al intentar operar. Si una venta llegó al servidor pero se perdió su respuesta, el reintento reutiliza la misma clave y recupera la venta existente. No borrar el almacenamiento del navegador con una operación pendiente.
+Si se corta la LAN, se apaga el servidor o la caja no puede alcanzarlo, **no se confirma una venta nueva**. El carrito se conserva en el navegador y la pantalla informa la falta de conexión al intentar operar. Si una venta llegó al servidor pero se perdió su respuesta, el reintento reutiliza la misma clave y recupera la venta existente. No borrar el almacenamiento del navegador con una operación pendiente. Las aperturas, ingresos/retiros, cobranzas, pagos, ajustes y aumentos de precios conservan también sus UUID: usar el aviso global **Recuperar operación** tras un corte, recarga o reingreso.
 
 Cajas desconectadas de una misma base no pueden producir conflictos de stock porque no confirman ventas independientes. Para habilitar múltiples bases offline en el futuro harán falta outbox duradera, IDs globales, firma/vinculación de terminal, orden de aplicación, conciliación de efectivo y política de stock sobrevendido; no hay un sincronizador ficticio en esta versión.
 
@@ -67,7 +67,7 @@ Para recuperar una instalación real: detener accesos, conservar una copia de la
 
 ## Impresoras y comprobantes
 
-El adaptador de impresión física usa `window.print()`; hay descarga directa de PDF desde el servidor como fallback. Instalar el driver Windows del modelo real y elegir papel de 58/80 mm, escala 100%, sin cabeceras/pies de navegador, márgenes mínimos. La vista previa adapta el ancho; el tamaño físico exacto depende del driver. No se afirma compatibilidad de hardware sin probar el dispositivo. Una impresora USB accesible por Windows puede usarse a través de ese diálogo; el servidor remoto no obtiene acceso USB directo.
+El adaptador de impresión física usa `window.print()`; hay descarga directa de PDF desde el servidor como fallback. Instalar el driver Windows del modelo real y elegir papel de 58/80 mm, escala 100%, sin cabeceras/pies de navegador, márgenes mínimos. La vista previa adapta el ancho; el tamaño físico exacto depende del driver. El PDF descargado tiene ancho físico de 58/80 mm según el snapshot original, altura calculada y paginación para tickets largos; los reportes/arqueos son A4. Se guardan también los nombres de caja y operador al vender. No se afirma compatibilidad de hardware sin probar el dispositivo. Una impresora USB accesible por Windows puede usarse a través de ese diálogo; el servidor remoto no obtiene acceso USB directo.
 
 La impresión silenciosa requiere otro adaptador y un agente local autenticado, con lista de dispositivos y orígenes autorizados, límites de trabajos y actualización segura. No está implementado. El ticket declara “NO VÁLIDO COMO FACTURA”. No se imprime CAE, QR fiscal ni identidad de comprobante autorizado.
 
@@ -77,7 +77,7 @@ Fastify registra JSON por stdout, identifica solicitudes y oculta cookies/tokens
 
 Compose incluye rotación de logs JSON (3 archivos de 10 MB por servicio) y systemd usa journal. En producción configurar alertas por healthcheck, disco y fallos de backup; supervisión de procesos y reloj sincronizado del servidor. Las fechas se guardan como `timestamptz` y se presentan en la zona configurada del comercio. Las migraciones y comandos financieros deben ejecutarse sobre el primario.
 
-CI prepara Node 24 y PostgreSQL real, compila, prueba integración y navegador, escanea dependencias y secretos. La ejecución local se registra en [VERIFICACION.md](VERIFICACION.md). El pipeline no se ejecutó en GitHub ni se publicó ningún servicio desde este workspace.
+CI prepara Node 24 y PostgreSQL real, compila, prueba integración y navegador, escanea dependencias y secretos. La prueba de imágenes y restauración usa clientes PostgreSQL 18 dentro de la propia imagen para evitar incompatibilidades con los clientes del runner. Puede ejecutarse con `npm run test:container` o `CONTAINER_ENGINE=podman npm run test:container`. La ejecución local se registra en [VERIFICACION.md](VERIFICACION.md). El pipeline no se ejecutó en GitHub ni se publicó ningún servicio desde este workspace.
 
 ## Actualización y restauración paso a paso
 
