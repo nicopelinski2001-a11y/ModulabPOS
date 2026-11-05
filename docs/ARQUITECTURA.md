@@ -35,7 +35,7 @@ RLS protege frente a consultas de aplicación que omitan filtros; no protege fre
 - ARS se representa en centavos enteros. Precios/costos unitarios: hasta 1.000.000.000 centavos. Total por operación: hasta 1.000.000.000.000 centavos.
 - Cantidades en milésimas: `1000` equivale a una unidad o un kg. Los productos por unidad sólo admiten múltiplos de 1000.
 - API JSON: enteros seguros. Multiplicaciones, parseo decimal y suma de importes críticos: `bigint` en TypeScript. PostgreSQL utiliza `bigint`/sumas exactas. El parser rechaza valores fuera del rango seguro de JSON.
-- Cada renglón redondea medio hacia arriba: `(precio_centavos * cantidad_milésimas + 500) / 1000`, división entera. El total es la suma de los renglones menos el descuento absoluto de venta. No se aceptan totales o precios declarados por el navegador: se recalculan con precios bloqueados de base.
+- Cada renglón redondea medio hacia arriba: `(precio_centavos * cantidad_milésimas + 500) / 1000`, división entera. El total es la suma de los renglones menos el descuento absoluto de venta. Los precios incluyen impuestos; el descuento se distribuye por mayor resto con desempate estable y luego se extrae el impuesto por línea con BigInt. La base verifica descuento, impuesto y vuelto al commit. No se aceptan totales o precios declarados por el navegador: se recalculan con precios bloqueados de base.
 - El precio mostrado puede cambiar entre agregar y cobrar. Antes de abrir cobro se refresca el producto. Si cambia nuevamente, el servidor rechaza pagos que no cubran el total actual; no confirma un precio viejo silenciosamente.
 - Los números decimales usados por `Intl`, gráficos y exportación son presentación; no se usan para asentar pagos o stock.
 - Costo y nombre se guardan en cada línea de venta. Cambiar el costo actual no reescribe rentabilidad histórica. El resultado es estimado y no sustituye liquidación impositiva o contable.
@@ -76,8 +76,8 @@ Período inclusivo por fecha local del comercio, máximo 367 días. Ventas se re
 - Operaciones: cantidad de ventas confirmadas; devoluciones se cuentan por separado.
 - Ticket promedio: total original cobrado/puesto a cuenta en ventas del período dividido por operaciones; no se reduce por devoluciones de ventas de otros días.
 - Costo neto: costo guardado en las líneas vendidas menos costo de las líneas devueltas en el período.
-- Resultado estimado: ventas netas menos costo neto. No incluye gastos, impuestos ni amortizaciones.
-- Medios de pago: importes aplicados de ventas menos devoluciones. Los pendientes se informan por separado. Cuenta corriente es deuda, no ingreso bancario.
+- Resultado estimado: ventas netas (con impuestos incluidos) menos costo cargado neto de devoluciones. No separa impuestos de compra ni incluye gastos/amortizaciones; no es resultado fiscal.
+- Medios de pago: importes aplicados de ventas menos devoluciones. Los pendientes se informan por separado, excluyendo los que ya tienen una confirmación manual inmutable. Los reportes usan una transacción REPEATABLE READ READ ONLY para mantener una instantánea entre totales y detalles. Cuenta corriente es deuda, no ingreso bancario.
 - Caja: fondo inicial + movimientos de efectivo. Transferencias y tarjetas no alteran el efectivo físico.
 - Stock valorizado: existencias actuales × costo actual. Productos por reponer: stock menor o igual al mínimo.
 - Ranking: cantidades de renglones vendidas menos devueltas; sus importes brutos no distribuyen el descuento global por producto.
@@ -85,3 +85,11 @@ Período inclusivo por fecha local del comercio, máximo 367 días. Ventas se re
 ## Referencias de diseño
 
 [PostgreSQL: políticas RLS](https://www.postgresql.org/docs/current/ddl-rowsecurity.html), [Fastify: validación y serialización](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/), [OWASP: prevención de CSRF](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html). Son referencias, no certificaciones del producto.
+
+## Sesión, navegador y adaptadores
+
+`session_lookup` exige usuario activo, vencimiento absoluto y `last_active_at` dentro del plazo del comercio. El navegador registra interacción real y envía actividad de forma limitada; polling de salud/reportes no renueva sesión. El bloqueo limpia datos de sesión de memoria y vuelve al login, conservando borradores por comercio/usuario. La interfaz tiene un ErrorBoundary y errores de transporte recuperables.
+
+Las consultas locales usan `networkMode: always`: `navigator.onLine=false` no debe impedir acceder al servidor de la LAN cuando se pierde internet. Se prueba ese escenario y se bloquean servicios externos en el smoke de navegador. Sin servidor no se contabiliza una venta. Web Locks y eventos de storage coordinan pestañas de un mismo perfil; la prueba simultánea confirma una sola venta para un carrito compartido.
+
+`PaymentRecorder` registra una declaración del operador y nunca cobra. `FiscalProvider` emite sólo metadatos de ticket comercial sin código de autorización. PDFKit genera PDF en el servidor. La impresión física usa el navegador con driver de sistema y conserva descarga PDF si la impresora no está disponible.

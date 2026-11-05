@@ -29,12 +29,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      - run: npm run check
       - run: npm run test:integration
       - run: npm run db:migrate && npm run db:seed
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit --audit-level=moderate
+      - run: |
+          npm run backup
+          backup_file="$(find backups -maxdepth 1 -name '*.dump' -type f | sort | tail -n 1)"
+          npm run backup:verify -- "$backup_file"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
