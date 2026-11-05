@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Users, Truck, Wallet, History, Search } from 'lucide-react';
+import { Plus, Wallet, History } from 'lucide-react';
 import { api, notify, useAction } from '../api';
 import { useSession } from '../context';
 import {

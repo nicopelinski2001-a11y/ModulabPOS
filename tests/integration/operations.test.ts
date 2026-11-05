@@ -290,6 +290,201 @@ describe('Atomicidad, concurrencia e idempotencia de venta', () => {
     ).rejects.toThrow();
   });
 });
+describe('Operación de kiosco completa', () => {
+  it('vende con cada medio, devuelve y exporta reportes reales', async () => {
+    const p = await makeProduct(owner, 'ALL-PAYMENTS', 20000, 12100);
+    const initial = (await get(owner, '/api/reports')).json().totals.net_cents;
+    const ids: string[] = [];
+    for (const method of ['cash', 'debit', 'credit', 'wallet', 'transfer']) {
+      const b = {
+        ...saleBody(p.id, shiftId, 12100),
+        payments: [
+          {
+            method,
+            amount_cents: 12100,
+            tendered_cents: method === 'cash' ? 12500 : 12100,
+            status: 'manual',
+          },
+        ],
+      };
+      const r = await post(owner, '/api/sales', b);
+      expect(r.statusCode, r.body).toBe(200);
+      ids.push(r.json().id);
+    }
+    const mixed = {
+      ...saleBody(p.id, shiftId, 12100),
+      payments: [
+        { method: 'cash', amount_cents: 2100, tendered_cents: 3000, status: 'manual' },
+        { method: 'transfer', amount_cents: 10000, tendered_cents: 10000, status: 'manual' },
+      ],
+    };
+    const result = await post(owner, '/api/sales', mixed);
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json().change_cents).toBe(900);
+    expect(
+      (
+        await post(owner, `/api/sales/${ids[0]}/return`, {
+          shift_id: shiftId,
+          reason: 'Cliente devuelve producto',
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect((await get(owner, `/api/products/${p.id}`)).json().stock_milli).toBe(15000);
+    expect((await get(owner, '/api/reports')).json().totals.net_cents - initial).toBe(5 * 12100);
+    for (const path of [
+      '/api/reports?format=pdf',
+      `/api/cash/shifts/${shiftId}/report?format=pdf`,
+      `/api/sales/${ids[0]}/ticket.pdf`,
+    ]) {
+      const pdf = await get(owner, path);
+      expect(pdf.statusCode, pdf.body).toBe(200);
+      expect(pdf.headers['content-type']).toContain('application/pdf');
+      expect(pdf.rawPayload.subarray(0, 5).toString()).toBe('%PDF-');
+      expect(pdf.rawPayload.length).toBeGreaterThan(1000);
+    }
+    const csv = await get(owner, '/api/reports?format=csv');
+    expect(csv.statusCode).toBe(200);
+    expect(csv.body).toContain('Ventas netas');
+    expect(csv.body).toContain('Más vendidos');
+    expect((await get(other, `/api/sales/${ids[0]}/ticket.pdf`)).statusCode).toBe(404);
+    expect((await get(cashier, '/api/reports?format=pdf')).statusCode).toBe(403);
+    expect((await get(owner, '/api/reports?from=2026-11-05&to=2026-01-01')).statusCode).toBe(400);
+  });
+  it('conserva impuestos históricos y descuentos por línea', async () => {
+    await admin.query('UPDATE tenants SET tax_rate_bps=2100 WHERE id=$1', [owner.tenant_id]);
+    try {
+      const a = await makeProduct(owner, 'TAX-21', 2000, 12100);
+      const response = await post(owner, '/api/products', {
+        sku: 'TAX-10',
+        name: 'Tasa particular',
+        price_cents: 11050,
+        tax_rate_bps: 1050,
+        initial_stock_milli: 1000,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const b = response.json();
+      const sale = await post(owner, '/api/sales', {
+        ...saleBody(a.id),
+        discount_cents: 2315,
+        items: [
+          { product_id: a.id, qty_milli: 1000 },
+          { product_id: b.id, qty_milli: 1000 },
+        ],
+        payments: [
+          { method: 'debit', amount_cents: 20835, tendered_cents: 20835, status: 'manual' },
+        ],
+      });
+      expect(sale.statusCode, sale.body).toBe(200);
+      expect(sale.json()).toMatchObject({ total_cents: 20835, tax_cents: 2835 });
+      expect(
+        sale
+          .json()
+          .lines.reduce((n: number, l: { discount_cents: number }) => n + l.discount_cents, 0),
+      ).toBe(2315);
+      await admin.query('UPDATE tenants SET tax_rate_bps=0 WHERE id=$1', [owner.tenant_id]);
+      const historical = (await get(owner, `/api/sales/${sale.json().id}`)).json();
+      expect(historical.tax_cents).toBe(2835);
+      expect(historical.receipt_settings.tax_rate_bps).toBe(2100);
+    } finally {
+      await admin.query('UPDATE tenants SET tax_rate_bps=0 WHERE id=$1', [owner.tenant_id]);
+    }
+  });
+  it('concilia pagos pendientes con evidencia e idempotencia sin modificar el libro original', async () => {
+    const pendingSale = await post(owner, '/api/sales', {
+      ...saleBody(),
+      payments: [
+        { method: 'wallet', amount_cents: 10000, tendered_cents: 10000, status: 'pending' },
+      ],
+    });
+    expect(pendingSale.statusCode, pendingSale.body).toBe(200);
+    const id = pendingSale.json().id;
+    expect(pendingSale.json().payments[0].status).toBe('pending');
+    const before = (await get(owner, '/api/reports'))
+      .json()
+      .payments.find((p: { method: string }) => p.method === 'wallet').pending_cents;
+    expect(
+      (
+        await post(other, `/api/sales/${id}/confirm-payment`, {
+          method: 'wallet',
+          reference: 'Banco 123456',
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await post(cashier, `/api/sales/${id}/confirm-payment`, {
+          method: 'wallet',
+          reference: 'Banco 123456',
+        })
+      ).statusCode,
+    ).toBe(403);
+    const requests = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        post(owner, `/api/sales/${id}/confirm-payment`, {
+          method: 'wallet',
+          reference: 'Banco 123456',
+        }),
+      ),
+    );
+    requests.forEach((r) => expect(r.statusCode, r.body).toBe(200));
+    expect(requests[0]!.json().payments[0].status).toBe('manual');
+    expect(
+      (
+        await post(owner, `/api/sales/${id}/confirm-payment`, {
+          method: 'wallet',
+          reference: 'Otra referencia',
+        })
+      ).statusCode,
+    ).toBe(409);
+    const after = (await get(owner, '/api/reports'))
+      .json()
+      .payments.find((p: { method: string }) => p.method === 'wallet').pending_cents;
+    expect(before - after).toBe(10000);
+    expect(
+      (await admin.query('SELECT status FROM sale_payments WHERE sale_id=$1', [id])).rows[0].status,
+    ).toBe('pending');
+  });
+  it('impide retiros que exceden el efectivo y mantiene toda la transacción', async () => {
+    const shifts = (await get(owner, '/api/cash/shifts')).json();
+    const before = shifts.find((s: { id: string }) => s.id === shiftId).expected_cents;
+    const r = await post(owner, '/api/cash/movement', {
+      shift_id: shiftId,
+      kind: 'out',
+      amount_cents: before + 1,
+      reason: 'Retiro que supera el saldo',
+      idempotency_key: randomUUID(),
+    });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json().message).toContain('Efectivo insuficiente');
+    expect(
+      (await get(owner, '/api/cash/shifts')).json().find((s: { id: string }) => s.id === shiftId)
+        .expected_cents,
+    ).toBe(before);
+  });
+  it('expira sesiones inactivas en el servidor y renueva sólo por actividad explícita', async () => {
+    const actor = await login('comercio-a', 'stock@test.local');
+    await admin.query(
+      "UPDATE sessions SET last_active_at=now()-interval '14 minutes' WHERE user_id=$1",
+      [actor.user_id],
+    );
+    expect((await get(actor, '/api/products')).statusCode).toBe(200);
+    const before = (
+      await admin.query('SELECT last_active_at FROM sessions WHERE user_id=$1', [actor.user_id])
+    ).rows[0].last_active_at;
+    await get(actor, '/api/health');
+    expect(
+      (await admin.query('SELECT last_active_at FROM sessions WHERE user_id=$1', [actor.user_id]))
+        .rows[0].last_active_at,
+    ).toEqual(before);
+    expect((await post(actor, '/api/auth/activity', {})).statusCode).toBe(200);
+    await admin.query(
+      "UPDATE sessions SET last_active_at=now()-interval '16 minutes' WHERE user_id=$1",
+      [actor.user_id],
+    );
+    expect((await get(actor, '/api/products')).statusCode).toBe(401);
+    expect((await post(actor, '/api/auth/activity', {})).statusCode).toBe(401);
+  });
+});
 describe('Compras, cuentas y cierre', () => {
   it('no toca stock al comprar y recibe una sola vez ante concurrencia', async () => {
     const supplier = (await post(owner, '/api/suppliers', { name: 'Proveedor de prueba' })).json();
@@ -401,6 +596,15 @@ describe('Compras, cuentas y cierre', () => {
         ),
       ),
     ).rejects.toThrow('Asiento de venta incompleto');
+  });
+  it('recupera conexiones inactivas cortadas por un reinicio sin caer el proceso', async () => {
+    const connection = await pool.connect();
+    const pid = (await connection.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+    connection.release();
+    const disconnected = new Promise<void>((resolve) => pool.once('error', () => resolve()));
+    await admin.query('SELECT pg_terminate_backend($1)', [pid]);
+    await disconnected;
+    expect((await get(owner, '/api/reports')).statusCode).toBe(200);
   });
   it('concilia todos los saldos de stock contra el libro', async () => {
     const r = await transaction(owner.tenant_id, owner.user_id, (db) =>

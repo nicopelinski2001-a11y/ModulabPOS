@@ -1,11 +1,7 @@
+import { serializeCsv } from '../shared/csv';
 /** Excel-compatible CSV; neutralize spreadsheet formulas on export. */
 export function downloadCsv(filename: string, rows: unknown[][]) {
-  const escape = (value: unknown) => {
-    let s = String(value ?? '');
-    if (/^[\s]*[=+@-]/.test(s)) s = `'${s}`;
-    return `"${s.replaceAll('"', '""')}"`;
-  };
-  const data = '\ufeff' + rows.map((r) => r.map(escape).join(';')).join('\r\n');
+  const data = serializeCsv(rows);
   const url = URL.createObjectURL(new Blob([data], { type: 'text/csv;charset=utf-8;' }));
   const a = document.createElement('a');
   a.href = url;

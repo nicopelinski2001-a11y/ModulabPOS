@@ -1,16 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Save,
-  Plus,
-  ShieldCheck,
-  KeyRound,
-  Printer,
-  Store,
-  Check,
-  Minus,
-  FileClock,
-} from 'lucide-react';
+import { Save, Plus, ShieldCheck, KeyRound, Printer, Store, Check, Minus } from 'lucide-react';
 import { api, notify, useAction } from '../api';
 import { useSession } from '../context';
 import {
@@ -24,7 +14,8 @@ import {
   Badge,
   dateTime,
 } from '../components/ui';
-import { roles, permissions, can } from '../../shared/permissions';
+import { parseDecimal, decimalInput } from '../../shared/money';
+import { roles, can } from '../../shared/permissions';
 import { type Role } from '../../shared/domain';
 const roleNames: Record<Role, string> = {
   owner: 'Propietario',
@@ -59,7 +50,7 @@ export function SettingsPage() {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
               await action.run(
-                () =>
+                async () =>
                   api(
                     '/settings',
                     {
@@ -68,6 +59,10 @@ export function SettingsPage() {
                       tax_id: f.get('tax_id'),
                       timezone: f.get('timezone'),
                       paper_width: Number(f.get('paper')),
+                      currency: 'ARS',
+                      tax_rate_bps: parseDecimal(String(f.get('tax_rate') || '0')),
+                      receipt_footer: f.get('receipt_footer'),
+                      session_idle_minutes: Number(f.get('session_idle_minutes')),
                       allow_negative_stock: f.get('negative') === 'on',
                     },
                     'PATCH',
@@ -96,6 +91,37 @@ export function SettingsPage() {
                 <option value="58">58 mm</option>
               </select>
             </Field>
+            <Field label="Moneda">
+              <input value="ARS · Peso argentino" disabled />
+            </Field>
+            <Field
+              label="Impuesto incluido por defecto (%)"
+              hint="Los precios finales ya incluyen este impuesto. Cada producto puede usar su propia tasa."
+            >
+              <input
+                name="tax_rate"
+                inputMode="decimal"
+                required
+                defaultValue={decimalInput(tenant.tax_rate_bps)}
+              />
+            </Field>
+            <Field label="Mensaje al pie del ticket">
+              <textarea
+                name="receipt_footer"
+                maxLength={300}
+                defaultValue={tenant.receipt_footer}
+              />
+            </Field>
+            <Field label="Bloquear por inactividad (minutos)">
+              <input
+                name="session_idle_minutes"
+                type="number"
+                min="1"
+                max="120"
+                required
+                defaultValue={tenant.session_idle_minutes}
+              />
+            </Field>
             <label className="checkbox">
               <input name="negative" type="checkbox" defaultChecked={tenant.allow_negative_stock} />{' '}
               Permitir ventas con stock negativo
@@ -118,7 +144,8 @@ export function SettingsPage() {
             </div>
             <div className="panel-body">
               <p>
-                Sesiones de hasta 8 horas, cookies protegidas y permisos validados en el servidor.
+                Sesiones de hasta 8 horas, bloqueo por inactividad y permisos por usuario. El plazo
+                de inactividad se configura junto a los datos del comercio.
               </p>
               <Button variant="secondary" onClick={() => setPassword(true)}>
                 <KeyRound size={16} /> Cambiar mi contraseña
@@ -138,8 +165,8 @@ export function SettingsPage() {
                 sistema.
               </p>
               <div className="alert warning">
-                Facturación electrónica ARCA e impresión silenciosa con agente local: pendientes de
-                integración. Los tickets actuales no son comprobantes fiscales.
+                Los tickets comerciales no son comprobantes fiscales. Para imprimir, usá el driver
+                del equipo; también podés descargar el ticket en PDF.
               </div>
             </div>
           </section>
@@ -153,8 +180,8 @@ export function SettingsPage() {
                 conexión a internet para registrar ventas manuales.
               </p>
               <p className="muted">
-                La sincronización entre instalaciones independientes y las suscripciones SaaS están
-                pendientes.
+                Si se interrumpe la red local, conservamos el carrito para recuperar la operación
+                cuando vuelva la conexión al servidor.
               </p>
             </div>
           </section>

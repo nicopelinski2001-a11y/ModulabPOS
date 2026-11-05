@@ -1,4 +1,13 @@
-import { useEffect, useRef, type ReactNode, type FormEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useId,
+  cloneElement,
+  isValidElement,
+  type ReactNode,
+  type ReactElement,
+  type FormEvent,
+} from 'react';
 import { X, LoaderCircle, Search, PackageOpen, AlertCircle } from 'lucide-react';
 export function Button({
   children,
@@ -65,11 +74,18 @@ export function Field({
   children: ReactNode;
   hint?: string;
 }) {
+  const id = useId();
+  const control = isValidElement(children)
+    ? cloneElement(children as ReactElement<Record<string, unknown>>, {
+        'aria-labelledby': `${id}-label`,
+        ...(hint ? { 'aria-describedby': `${id}-hint` } : {}),
+      })
+    : children;
   return (
     <label className="field">
-      <span>{label}</span>
-      {children}
-      {hint && <small>{hint}</small>}
+      <span id={`${id}-label`}>{label}</span>
+      {control}
+      {hint && <small id={`${id}-hint`}>{hint}</small>}
     </label>
   );
 }

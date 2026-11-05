@@ -12,6 +12,12 @@ export default async function setup() {
       email: 'e2e@test.local',
       password: 'E2E-Test-Password-2026',
     });
+    await createTenant(db, {
+      slug: 'e2e-operations',
+      name: 'Kiosco integral',
+      email: 'operations@test.local',
+      password: 'E2E-Test-Password-2026',
+    });
   } finally {
     await db.end();
   }

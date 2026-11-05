@@ -10,3 +10,4 @@ backups/
 *.log
 .local/
 !.env.docker.example
+releases/

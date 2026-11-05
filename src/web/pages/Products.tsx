@@ -40,6 +40,7 @@ export function productBody(p: Product) {
     cost_cents: p.cost_cents,
     min_stock_milli: p.min_stock_milli,
     active: p.active,
+    tax_rate_bps: p.tax_rate_bps,
   };
 }
 export function Products() {
@@ -85,6 +86,7 @@ export function Products() {
           'categoria',
           'unidad',
           'precio',
+          'impuesto_incluido_porcentaje',
           'costo',
           'stock',
           'stock_minimo',
@@ -97,6 +99,7 @@ export function Products() {
           p.category,
           p.unit,
           decimalInput(p.price_cents),
+          p.tax_rate_bps == null ? '' : decimalInput(p.tax_rate_bps),
           decimalInput(p.cost_cents),
           decimalInput(p.stock_milli, 3),
           decimalInput(p.min_stock_milli, 3),
@@ -310,6 +313,7 @@ function ProductForm({ product: p, onClose }: { product: Product | null; onClose
               supplier_id: f.get('supplier_id') || null,
               unit: f.get('unit'),
               price_cents: parseDecimal(String(f.get('price'))),
+              tax_rate_bps: f.get('tax_rate') ? parseDecimal(String(f.get('tax_rate'))) : null,
               cost_cents: parseDecimal(String(f.get('cost') || '0')),
               min_stock_milli: parseDecimal(String(f.get('min') || '0'), 3),
               active: f.get('active') === 'on',
@@ -359,6 +363,16 @@ function ProductForm({ product: p, onClose }: { product: Product | null; onClose
               required
               inputMode="decimal"
               defaultValue={p ? decimalInput(p.price_cents) : ''}
+            />
+          </Field>
+          <Field
+            label="Impuesto incluido (%)"
+            hint="Vacío usa la tasa del comercio. 0 es sin impuesto."
+          >
+            <input
+              name="tax_rate"
+              inputMode="decimal"
+              defaultValue={p?.tax_rate_bps == null ? '' : decimalInput(p.tax_rate_bps)}
             />
           </Field>
           <Field label="Costo (ARS)">
@@ -436,6 +450,9 @@ function ImportProducts({ onClose }: { onClose: () => void }) {
             category: data.categoria || 'General',
             unit: data.unidad || 'unit',
             price_cents: parseDecimal(data.precio!),
+            tax_rate_bps: data.impuesto_incluido_porcentaje
+              ? parseDecimal(data.impuesto_incluido_porcentaje)
+              : null,
             cost_cents: parseDecimal(data.costo || '0'),
             min_stock_milli: parseDecimal(data.stock_minimo || '0', 3),
             active: data.activo !== 'no',
@@ -445,7 +462,7 @@ function ImportProducts({ onClose }: { onClose: () => void }) {
             throw new Error('El stock de productos por unidad debe ser entero.');
           return { ...p, initial_stock_milli: stock };
         } catch (e) {
-          throw new Error(`Fila ${index + 2}: ${(e as Error).message}`);
+          throw new Error(`Fila ${index + 2}: ${(e as Error).message}`, { cause: e });
         }
       });
       if (new Set(result.map((r) => r.sku)).size !== result.length)

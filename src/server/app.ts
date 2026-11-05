@@ -55,10 +55,10 @@ export async function buildApp(logging = true) {
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
-        upgradeInsecureRequests: config.NODE_ENV === 'production' ? [] : null,
+        upgradeInsecureRequests: config.secureCookies ? [] : null,
       },
     },
-    hsts: config.NODE_ENV === 'production',
+    hsts: config.secureCookies,
   });
   await app.register(rateLimit, {
     max: 600,
@@ -78,7 +78,7 @@ export async function buildApp(logging = true) {
   });
   app.get('/api/health', async () => {
     await pool.query('SELECT 1');
-    return { status: 'ok', version: '0.1.0' };
+    return { status: 'ok', version: '1.0.0' };
   });
   await authRoutes(app);
   await productRoutes(app);
@@ -117,11 +117,13 @@ export async function buildApp(logging = true) {
       return;
     }
     if (error.code === '23514') {
+      const messages: Record<string, string> = {
+        'Efectivo insuficiente en caja':
+          'Efectivo insuficiente en caja. Registrá un ingreso o revisá el retiro.',
+        'Stock insuficiente': 'Stock insuficiente. Revisá las cantidades.',
+      };
       reply.code(409).send({
-        message:
-          error.message === 'Stock insuficiente'
-            ? 'Stock insuficiente. Revisá las cantidades.'
-            : 'La operación no cumple las reglas de integridad.',
+        message: messages[error.message] ?? 'La operación no cumple las reglas de integridad.',
       });
       return;
     }
@@ -129,6 +131,18 @@ export async function buildApp(logging = true) {
       reply
         .code(409)
         .send({ message: 'Otra operación modificó estos datos. Reintentá con la misma clave.' });
+      return;
+    }
+    if (
+      ['ECONNREFUSED', 'ECONNRESET', '57P01', '57P03', '53300', '08006', '57014'].includes(
+        error.code ?? '',
+      )
+    ) {
+      req.log.error({ err: error, requestId: req.id }, 'Base de datos no disponible');
+      reply.code(503).send({
+        message: 'El servidor de datos está ocupado o sin conexión. Reintentá la misma operación.',
+        requestId: req.id,
+      });
       return;
     }
     if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {

@@ -80,6 +80,7 @@ try {
     'held_sales',
     'audit_events',
     'commands',
+    'payment_confirmations',
   ];
   for (const table of tables) await db.query(`GRANT SELECT ON ${table} TO modulab_app`);
   await db.query(
@@ -88,16 +89,16 @@ try {
   for (const table of tables.filter((t) => !['tenants', 'branches', 'cash_registers'].includes(t)))
     await db.query(`GRANT INSERT ON ${table} TO modulab_app`);
   await db.query(
-    'REVOKE INSERT ON products FROM modulab_app; GRANT INSERT(tenant_id,sku,barcode,name,description,category,brand,supplier_id,unit,price_cents,cost_cents,min_stock_milli,active) ON products TO modulab_app',
+    'REVOKE INSERT ON products FROM modulab_app; GRANT INSERT(tenant_id,sku,barcode,name,description,category,brand,supplier_id,unit,price_cents,cost_cents,min_stock_milli,active,tax_rate_bps) ON products TO modulab_app',
   );
   await db.query(
-    'GRANT UPDATE(name,address,tax_id,timezone,allow_negative_stock,paper_width,next_sale_number) ON tenants TO modulab_app',
+    'GRANT UPDATE(name,address,tax_id,timezone,allow_negative_stock,paper_width,next_sale_number,currency,tax_rate_bps,receipt_footer,session_idle_minutes) ON tenants TO modulab_app',
   );
   await db.query(
-    'GRANT UPDATE(sku,barcode,name,description,category,brand,supplier_id,unit,price_cents,cost_cents,min_stock_milli,active,updated_at) ON products TO modulab_app',
+    'GRANT UPDATE(sku,barcode,name,description,category,brand,supplier_id,unit,price_cents,cost_cents,min_stock_milli,active,updated_at,tax_rate_bps) ON products TO modulab_app',
   );
   await db.query(
-    'GRANT UPDATE ON customers,suppliers,cash_shifts,purchases,users TO modulab_app; GRANT DELETE ON sessions,held_sales TO modulab_app',
+    'GRANT UPDATE ON customers,suppliers,cash_shifts,purchases,users TO modulab_app; GRANT UPDATE(last_active_at) ON sessions TO modulab_app; GRANT DELETE ON sessions,held_sales TO modulab_app',
   );
   await db.query(
     'GRANT EXECUTE ON FUNCTION auth_lookup(text,text),session_lookup(text),login_gate(text) TO modulab_app',

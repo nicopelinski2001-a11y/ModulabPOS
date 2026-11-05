@@ -22,6 +22,7 @@ export const productSchema = z
     cost_cents: cents.max(1_000_000_000).default(0),
     min_stock_milli: z.number().int().min(0).max(1_000_000_000).default(0),
     active: z.boolean().default(true),
+    tax_rate_bps: z.number().int().min(0).max(10000).nullable().default(null),
   })
   .strict();
 export const saleSchema = z
@@ -72,6 +73,10 @@ export type Tenant = {
   timezone: string;
   allow_negative_stock: boolean;
   paper_width: 58 | 80;
+  currency: 'ARS';
+  tax_rate_bps: number;
+  receipt_footer: string;
+  session_idle_minutes: number;
 };
 export type Shift = {
   id: string;
@@ -94,6 +99,7 @@ export type Sale = {
   subtotal_cents: number;
   discount_cents: number;
   total_cents: number;
+  tax_cents: number;
   change_cents: number;
   created_at: string;
   returned: boolean;
@@ -108,6 +114,9 @@ export type Sale = {
     price_cents: number;
     cost_cents: number;
     total_cents: number;
+    tax_rate_bps: number;
+    discount_cents: number;
+    tax_cents: number;
   }>;
   payments?: Array<{
     method: (typeof paymentMethods)[number];

@@ -13,15 +13,27 @@ export const pool = new pg.Pool({
   idleTimeoutMillis: 30000,
   statement_timeout: 10000,
 });
+pool.on('error', (error: Error & { code?: string }) => {
+  // An idle connection can disappear on a database restart. Do not crash Node.
+  console.error(
+    JSON.stringify({
+      level: 'error',
+      event: 'database_pool_error',
+      code: error.code ?? 'connection_lost',
+    }),
+  );
+});
 export type DB = PoolClient;
 export async function transaction<T>(
   tenantId: string,
   userId: string | null,
   fn: (db: DB) => Promise<T>,
+  options: { readOnly?: boolean } = {},
 ): Promise<T> {
   const db = await pool.connect();
+  let broken = false;
   try {
-    await db.query('BEGIN');
+    await db.query(options.readOnly ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN');
     await db.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.user_id',$2,true)", [
       tenantId,
       userId ?? '',
@@ -30,14 +42,21 @@ export async function transaction<T>(
     await db.query('COMMIT');
     return result;
   } catch (error) {
-    await db.query('ROLLBACK');
+    try {
+      await db.query('ROLLBACK');
+    } catch {
+      broken = true;
+    }
     throw error;
   } finally {
-    db.release();
+    db.release(broken);
   }
 }
-export const withUser = <T>(user: User, fn: (db: DB) => Promise<T>) =>
-  transaction(user.tenant_id, user.user_id, fn);
+export const withUser = <T>(
+  user: User,
+  fn: (db: DB) => Promise<T>,
+  options: { readOnly?: boolean } = {},
+) => transaction(user.tenant_id, user.user_id, fn, options);
 export async function assertDatabaseRole() {
   const {
     rows: [role],

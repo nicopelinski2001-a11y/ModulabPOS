@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download, ReceiptText, Undo2 } from 'lucide-react';
-import { api, notify, useAction } from '../api';
+import { api, useAction } from '../api';
 import { useSession } from '../context';
 import {
   Button,
@@ -31,7 +31,7 @@ export function Sales() {
   const sales = useQuery({
     queryKey: ['sales', from, to, offset],
     queryFn: () =>
-      api<Array<Sale & { methods: string; customer_name: string }>>(
+      api<Array<Sale & { methods: string; customer_name: string; pending_payment: boolean }>>(
         `/sales?limit=100&offset=${offset}${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`,
       ),
   });
@@ -135,8 +135,12 @@ export function Sales() {
                         .join(' + ')}
                     </td>
                     <td>
-                      <Badge tone={s.returned ? 'amber' : 'green'}>
-                        {s.returned ? 'Devuelta' : 'Completada'}
+                      <Badge tone={s.returned || s.pending_payment ? 'amber' : 'green'}>
+                        {s.returned
+                          ? 'Devuelta'
+                          : s.pending_payment
+                            ? 'Pago pendiente'
+                            : 'Completada'}
                       </Badge>
                     </td>
                     <td className="right strong">{money(s.total_cents)}</td>

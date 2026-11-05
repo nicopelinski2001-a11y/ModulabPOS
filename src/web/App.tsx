@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from 'react';
+import { useEffect, useState, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   LayoutDashboard,
@@ -24,6 +24,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { api, setCsrf, setNotify, ApiError } from './api';
+import { SessionActivity } from './components/SessionActivity';
+import { ConnectionStatus } from './components/ConnectionStatus';
 import { SessionContext } from './context';
 import { Button, Field, Loading, ErrorState } from './components/ui';
 import { can } from '../shared/permissions';
@@ -100,8 +102,38 @@ const nav: Array<{
 ];
 export function App() {
   const qc = useQueryClient();
+  const [locked, setLocked] = useState(() => {
+    try {
+      return localStorage.getItem('modulab-local-lock') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [authEpoch, setAuthEpoch] = useState(0);
+  const lock = useCallback(() => {
+    setCsrf('');
+    try {
+      localStorage.setItem('modulab-local-lock', '1');
+    } catch {
+      /* memory lock still applies */
+    }
+    setLocked(true);
+    qc.clear();
+  }, [qc]);
+  useEffect(() => {
+    const sharedLock = (event: StorageEvent) => {
+      if (event.key === 'modulab-local-lock' && event.newValue === '1') lock();
+    };
+    window.addEventListener('storage', sharedLock);
+    window.addEventListener('modulab-session-expired', lock);
+    return () => {
+      window.removeEventListener('storage', sharedLock);
+      window.removeEventListener('modulab-session-expired', lock);
+    };
+  }, [lock]);
   const session = useQuery({
-    queryKey: ['session'],
+    queryKey: ['session', authEpoch],
+    enabled: !locked,
     queryFn: async () => {
       const data = await api<{ user: User; tenant: Tenant; csrf: string }>('/auth/me');
       setCsrf(data.csrf);
@@ -110,7 +142,13 @@ export function App() {
   });
   const [page, setPage] = useState(location.hash.slice(1));
   const [mobile, setMobile] = useState(false);
-  const [dark, setDark] = useState(localStorage.getItem('modulab-theme') === 'dark');
+  const [dark, setDark] = useState(() => {
+    try {
+      return localStorage.getItem('modulab-theme') === 'dark';
+    } catch {
+      return false;
+    }
+  });
   const [toast, setToast] = useState<{ message: string; kind: string } | null>(null);
   useEffect(() => {
     setNotify((message, kind = 'success') => setToast({ message, kind }));
@@ -123,7 +161,11 @@ export function App() {
   }, [toast]);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    localStorage.setItem('modulab-theme', dark ? 'dark' : 'light');
+    try {
+      localStorage.setItem('modulab-theme', dark ? 'dark' : 'light');
+    } catch {
+      /* theme stays in memory */
+    }
   }, [dark]);
   useEffect(() => {
     const cb = () => setPage(location.hash.slice(1));
@@ -135,15 +177,15 @@ export function App() {
     setPage(id);
     setMobile(false);
   };
-  if (session.isPending)
+  if (session.isPending && !locked)
     return (
       <div className="app-loading">
         <Layers size={35} />
         <Loading />
       </div>
     );
-  if (!session.data) {
-    if (session.error instanceof ApiError && session.error.status !== 401)
+  if (locked || !session.data) {
+    if (!locked && session.error instanceof ApiError && session.error.status !== 401)
       return (
         <div className="login-page">
           <div className="login-card">
@@ -152,7 +194,20 @@ export function App() {
           </div>
         </div>
       );
-    return <Login onLogin={() => qc.invalidateQueries()} />;
+    return (
+      <Login
+        onLogin={() => {
+          try {
+            localStorage.removeItem('modulab-local-lock');
+          } catch {
+            /* memory session */
+          }
+          qc.clear();
+          setLocked(false);
+          setAuthEpoch((value) => value + 1);
+        }}
+      />
+    );
   }
   const { user, tenant } = session.data;
   const available = nav.filter((n) => can(user.role, n.permission));
@@ -203,6 +258,7 @@ export function App() {
   }
   return (
     <SessionContext.Provider value={{ user, tenant, go }}>
+      <SessionActivity user={user} tenant={tenant} onLock={lock} />
       <div className="app-shell">
         {mobile && (
           <button
@@ -259,7 +315,7 @@ export function App() {
                 Instalación local<small>Datos en tu servidor</small>
               </span>
             </div>
-            <small>Modulab Software · v0.1.0</small>
+            <small>Modulab Software · v1.0.0</small>
           </div>
         </aside>
         <div className="workspace">
@@ -306,11 +362,11 @@ export function App() {
                 onClick={async () => {
                   try {
                     await api('/auth/logout', {});
-                    setCsrf('');
-                    qc.clear();
+                  } catch {
+                    /* local lock is mandatory even if logout cannot reach the server */
+                  } finally {
+                    lock();
                     setPage('');
-                  } catch (e) {
-                    setToast({ message: (e as Error).message, kind: 'error' });
                   }
                 }}
               >
@@ -318,6 +374,7 @@ export function App() {
               </button>
             </div>
           </header>
+          <ConnectionStatus />
           <main key={active.id} className={`main-content ${active.id === 'pos' ? 'pos-main' : ''}`}>
             <Suspense fallback={<Loading />}>{content}</Suspense>
           </main>

@@ -1,6 +1,6 @@
 {
   "name": "modulab-pos",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -22,7 +22,16 @@
     "backup": "tsx --env-file-if-exists=.env scripts/backup.ts",
     "backup:verify": "tsx --env-file-if-exists=.env scripts/verify-backup.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings=0",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
+    "setup": "tsx scripts/setup.ts",
+    "package": "tsx scripts/package.ts",
+    "deploy": "bash scripts/deploy.sh",
+    "verify": "npm run check && npm run build && npm run test:integration && npm run test:e2e",
+    "kiosk:start": "node scripts/kiosk-start.mjs",
+    "user:reset-password": "tsx --env-file-if-exists=.env scripts/reset-password.ts",
+    "service:install": "tsx scripts/install-service.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",
@@ -32,6 +41,7 @@
     "@tanstack/react-query": "^5.104.5",
     "fastify": "^5.12.7",
     "lucide-react": "^1.61.0",
+    "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -39,17 +49,25 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.1",
     "@types/node": "^24.19.2",
+    "@types/pdfkit": "^0.17.7",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "minimatch": "^11.0.4"
   }
 }

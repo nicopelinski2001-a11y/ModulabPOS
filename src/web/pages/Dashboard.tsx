@@ -21,7 +21,7 @@ import {
   Package,
   AlertTriangle,
 } from 'lucide-react';
-import { api } from '../api';
+import { api, downloadFile, useAction } from '../api';
 import { useSession } from '../context';
 import {
   PageTitle,
@@ -36,7 +36,6 @@ import {
 import { money, qty } from '../../shared/money';
 import { paymentNames } from '../../shared/payments';
 import { type Sale } from '../../shared/domain';
-import { downloadCsv } from '../csv';
 type Report = {
   from: string;
   to: string;
@@ -64,6 +63,7 @@ type Report = {
   }[];
 };
 export function Dashboard({ reports = false }: { reports?: boolean }) {
+  const action = useAction();
   const { tenant, user, go } = useSession();
   const localToday = today(tenant.timezone);
   const [range, setRange] = useState({ from: localToday, to: localToday });
@@ -101,22 +101,30 @@ export function Dashboard({ reports = false }: { reports?: boolean }) {
               variant="secondary"
               disabled={!r}
               onClick={() =>
-                r &&
-                downloadCsv(`reporte-${range.from}-${range.to}.csv`, [
-                  ['Concepto', 'Importe ARS'],
-                  ['Ventas brutas', r.totals.gross_cents / 100],
-                  ['Descuentos', r.totals.discount_cents / 100],
-                  ['Devoluciones', -r.totals.refunds_cents / 100],
-                  ['Ventas netas', r.totals.net_cents / 100],
-                  ['Costo estimado', r.totals.cost_cents / 100],
-                  ['Resultado estimado', r.totals.estimated_profit_cents / 100],
-                  [],
-                  ['Fecha', 'Ventas netas ARS'],
-                  ...r.daily.map((x) => [x.date, x.net_cents / 100]),
-                ])
+                void action.run(() =>
+                  downloadFile(
+                    `/reports?from=${range.from}&to=${range.to}&format=csv`,
+                    `reporte-${range.from}-${range.to}.csv`,
+                  ),
+                )
               }
             >
               <Download size={16} /> Exportar reporte
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={!r}
+              busy={action.busy}
+              onClick={() =>
+                void action.run(() =>
+                  downloadFile(
+                    `/reports?from=${range.from}&to=${range.to}&format=pdf`,
+                    `reporte-${range.from}-${range.to}.pdf`,
+                  ),
+                )
+              }
+            >
+              Descargar PDF
             </Button>
             <Button onClick={() => go('pos')}>
               <ShoppingBasket size={17} /> Nueva venta

@@ -11,7 +11,6 @@ import {
   ArrowRight,
   Wallet,
   Check,
-  Search,
   X,
   Keyboard,
   AlertTriangle,
@@ -29,10 +28,29 @@ import {
   Badge,
 } from '../components/ui';
 import { money, qty, lineTotal, sumMoney, parseDecimal, decimalInput } from '../../shared/money';
+import { saleTotals } from '../../shared/totals';
+import { saleSchema, productSchema } from '../../shared/domain';
 import { can } from '../../shared/permissions';
 import { paymentNames, paymentMethods } from '../../shared/payments';
 import { type Product, type Shift, type SaleInput, type Sale } from '../../shared/domain';
 import { Receipt } from '../components/Receipt';
+function playScanSound() {
+  try {
+    const context = new AudioContext();
+    const tone = context.createOscillator();
+    const gain = context.createGain();
+    gain.gain.value = 0.025;
+    tone.frequency.value = 880;
+    tone.connect(gain).connect(context.destination);
+    tone.start();
+    tone.stop(context.currentTime + 0.06);
+    tone.onended = () => {
+      void context.close();
+    };
+  } catch {
+    /* visual feedback remains available */
+  }
+}
 type CartItem = { product: Product; qty_milli: number };
 type Held = { id: string; label: string; items: { product_id: string; qty_milli: number }[] };
 type Customer = { id: string; name: string; balance_cents: number; credit_limit_cents: number };
@@ -43,13 +61,57 @@ function readStorage<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
+function productFields(product: Product | undefined) {
+  if (!product) return {};
+  const { id, stock_milli, updated_at, ...fields } = product;
+  // Catalog contains server metadata and cashiers intentionally receive no cost.
+  return Object.fromEntries(Object.entries(fields).filter(([key]) => key in productSchema.shape));
+}
 export function POS() {
   const { user, tenant, go } = useSession();
   const qc = useQueryClient();
   const draftKey = `modulab-cart:${user.tenant_id}:${user.user_id}`;
   const pendingKey = `modulab-pending:${user.tenant_id}:${user.user_id}`;
-  const [cart, setCart] = useState<CartItem[]>(() => readStorage(draftKey, []));
-  const [pending, setPending] = useState<SaleInput | null>(() => readStorage(pendingKey, null));
+  const [cart, updateCart] = useState<CartItem[]>(() => {
+    const saved = readStorage<unknown>(draftKey, []);
+    if (!Array.isArray(saved)) return [];
+    const restored = saved
+      .filter(
+        (item) =>
+          item &&
+          productSchema.safeParse(productFields(item.product)).success &&
+          typeof item.product.id === 'string' &&
+          Number.isSafeInteger(item.qty_milli) &&
+          item.qty_milli > 0 &&
+          item.qty_milli <= 1_000_000_000,
+      )
+      .slice(0, 200);
+    try {
+      sumMoney(restored.map((i) => lineTotal(i.product.price_cents, i.qty_milli)));
+      return restored;
+    } catch {
+      return [];
+    }
+  });
+  const cartRef = useRef(cart);
+  const setCart = useCallback((next: CartItem[] | ((previous: CartItem[]) => CartItem[])) => {
+    try {
+      const updated = typeof next === 'function' ? next(cartRef.current) : next;
+      if (updated === cartRef.current) return false;
+      if (updated.length > 200) throw new Error('Se permiten hasta 200 productos por venta.');
+      sumMoney(updated.map((item) => lineTotal(item.product.price_cents, item.qty_milli)));
+      cartRef.current = updated;
+      updateCart(updated);
+      return true;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Carrito inválido.', 'error');
+      return false;
+    }
+  }, []);
+  const [pending, setPending] = useState<SaleInput | null>(() => {
+    const parsed = saleSchema.safeParse(readStorage(pendingKey, null));
+    return parsed.success ? parsed.data : null;
+  });
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
@@ -57,6 +119,8 @@ export function POS() {
   const [heldOpen, setHeldOpen] = useState(false);
   const [receipt, setReceipt] = useState<Sale | null>(null);
   const [posting, setPosting] = useState(false);
+  const [scanning, setScanning] = useState(0);
+  const scansInFlight = useRef(0);
   const [quantityEdit, setQuantityEdit] = useState<CartItem | null>(null);
   const [holdLabel, setHoldLabel] = useState('');
   const [suspend, setSuspend] = useState(false);
@@ -95,40 +159,74 @@ export function POS() {
   });
   const subtotal = sumMoney(cart.map((i) => lineTotal(i.product.price_cents, i.qty_milli)));
   const add = useCallback(
-    (p: Product) => {
+    (p: Product, clearSearch = true) => {
       if (pending || postingRef.current) return;
-      setCart((prev) => {
+      const changed = setCart((prev) => {
         const old = prev.find((i) => i.product.id === p.id);
+        if ((old && old.qty_milli >= 1_000_000_000) || (!old && prev.length >= 200)) {
+          notify('Se alcanzó el límite de cantidad o productos por venta.', 'error');
+          return prev;
+        }
         return old
           ? prev.map((i) =>
               i.product.id === p.id ? { product: p, qty_milli: i.qty_milli + 1000 } : i,
             )
           : [...prev, { product: p, qty_milli: 1000 }];
       });
+      if (!changed) return;
+      playScanSound();
       setLastAdded(p.name);
       setTimeout(() => setLastAdded(''), 2200);
-      setSearch('');
+      if (clearSearch) setSearch('');
       input.current?.focus();
     },
     [pending],
   );
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (postingRef.current) return;
+      if (event.key === pendingKey) {
+        const saved = saleSchema.safeParse(readStorage(pendingKey, null));
+        setPending(saved.success ? saved.data : null);
+      }
+      if (event.key === draftKey) {
+        // Another tab owns the same operator draft. Reload validates it on entry.
+        setCheckout(false);
+        const saved = readStorage<CartItem[]>(draftKey, []);
+        if (Array.isArray(saved)) setCart(saved);
+      }
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [draftKey, pendingKey]);
   const submit = useCallback(
     async (body: SaleInput) => {
       if (postingRef.current) return;
       postingRef.current = true;
       setPosting(true);
       try {
-        // Persist the exact intent BEFORE sending: a lost response must reuse the key and body.
-        localStorage.setItem(pendingKey, JSON.stringify(body));
-        setPending(body);
-        const result = await api<Sale>('/sales', body);
-        localStorage.removeItem(pendingKey);
-        localStorage.removeItem(draftKey);
-        setPending(null);
-        setCart([]);
-        setCheckout(false);
-        setReceipt(result);
-        await qc.invalidateQueries();
+        const send = async () => {
+          const saved = saleSchema.safeParse(readStorage(pendingKey, null));
+          if (saved.success) body = saved.data;
+          else {
+            const stored = readStorage<CartItem[]>(draftKey, []);
+            if (!stored.length)
+              throw new Error('Este carrito ya fue cobrado o vaciado en otra pestaña.');
+          }
+          // Persist the exact intent BEFORE sending: a lost response must reuse the key and body.
+          localStorage.setItem(pendingKey, JSON.stringify(body));
+          setPending(body);
+          const result = await api<Sale>('/sales', body);
+          localStorage.removeItem(pendingKey);
+          localStorage.setItem(draftKey, '[]');
+          setPending(null);
+          setCart([]);
+          setCheckout(false);
+          setReceipt(result);
+          await qc.invalidateQueries();
+        };
+        if (navigator.locks) await navigator.locks.request(pendingKey, send);
+        else await send();
       } catch (e) {
         if (
           e instanceof ApiError &&
@@ -144,11 +242,21 @@ export function POS() {
       } finally {
         postingRef.current = false;
         setPosting(false);
+        // A competing tab may have completed this shared draft while we waited.
+        try {
+          if (localStorage.getItem(draftKey) === '[]') setCart([]);
+        } catch {
+          /* storage error was reported before sending */
+        }
       }
     },
     [pendingKey, draftKey, qc],
   );
   const startCheckout = useCallback(async () => {
+    if (scansInFlight.current) {
+      notify('Esperá a que terminen de agregarse los códigos escaneados.', 'error');
+      return;
+    }
     if (pending) {
       setCheckout(true);
       return;
@@ -177,7 +285,7 @@ export function POS() {
         e.preventDefault();
         input.current?.focus();
       }
-      if (e.key === 'F8') {
+      if (e.key === 'F8' && !document.querySelector('dialog[open]')) {
         e.preventDefault();
         void startCheckout();
       }
@@ -189,24 +297,37 @@ export function POS() {
     return () => window.removeEventListener('keydown', listener);
   }, [startCheckout, checkout, heldOpen, suspend]);
   const scan = async () => {
-    if (!search.trim()) return;
-    const result = await action.run(() =>
-      api<{ items: Product[] }>(`/products?q=${encodeURIComponent(search.trim())}&limit=60`),
-    );
-    if (!result) return;
-    const exact = result.items.find(
-      (p) => p.barcode === search.trim() || p.sku.toLowerCase() === search.trim().toLowerCase(),
-    );
-    if (exact) add(exact);
-    else if (result.items.length === 1) add(result.items[0]!);
-    else
-      notify(
-        result.items.length
-          ? 'Seleccioná un producto de la lista.'
-          : 'No encontramos ese producto.',
-        'error',
+    const code = search.trim();
+    if (!code || pending || postingRef.current) return;
+    // Capture each scanner input before awaiting I/O. Slow responses must never
+    // drop a subsequent scan or clear a code the operator has just started typing.
+    setSearch('');
+    scansInFlight.current++;
+    setScanning(scansInFlight.current);
+    try {
+      const result = await api<{ items: Product[] }>(
+        `/products?q=${encodeURIComponent(code)}&limit=60`,
       );
+      const exact = result.items.find(
+        (p) => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase(),
+      );
+      if (exact) add(exact, false);
+      else if (result.items.length === 1) add(result.items[0]!, false);
+      else
+        notify(
+          result.items.length
+            ? 'Seleccioná un producto de la lista.'
+            : 'No encontramos ese producto.',
+          'error',
+        );
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'No se pudo buscar el código.', 'error');
+    } finally {
+      scansInFlight.current--;
+      setScanning(scansInFlight.current);
+    }
   };
+
   return (
     <>
       <PageTitle
@@ -329,7 +450,7 @@ export function POS() {
                   disabled={!!pending || posting}
                 >
                   <div
-                    className={`product-art tone-${category ? categories.data?.indexOf(category)! % 4 : index % 4}`}
+                    className={`product-art tone-${category ? (categories.data?.indexOf(category) ?? 0) % 4 : index % 4}`}
                   >
                     <ProductGlyph category={p.category} />
                     <span className="product-add">
@@ -472,8 +593,8 @@ export function POS() {
             </div>
             <Button
               className="checkout-button"
-              disabled={(!cart.length && !pending) || !shift}
-              busy={posting || action.busy}
+              disabled={(!cart.length && !pending) || !shift || scanning > 0}
+              busy={posting || action.busy || scanning > 0}
               onClick={() => void startCheckout()}
             >
               Cobrar venta{' '}
@@ -674,7 +795,7 @@ function Checkout({
   onSubmit: (b: SaleInput) => Promise<void>;
   onClose: () => void;
 }) {
-  const { user } = useSession();
+  const { user, tenant } = useSession();
   const subtotal = sumMoney(cart.map((i) => lineTotal(i.product.price_cents, i.qty_milli)));
   const [discount, setDiscount] = useState('0');
   const [customer, setCustomer] = useState('');
@@ -689,10 +810,26 @@ function Checkout({
     /* invalid form gets explicit error on submission */
   }
   const total = subtotal - discountCents;
+  let includedTax = 0;
+  try {
+    includedTax = saleTotals(
+      cart.map((i) => ({
+        id: i.product.id,
+        price_cents: i.product.price_cents,
+        qty_milli: i.qty_milli,
+        tax_rate_bps: i.product.tax_rate_bps ?? tenant.tax_rate_bps,
+      })),
+      discountCents,
+    ).tax_cents;
+  } catch {
+    /* validated on submit */
+  }
   let applied = 0;
   try {
     applied = sumMoney(methods.map((p) => parseDecimal(p.amount || '0')));
-  } catch {}
+  } catch {
+    /* form validation reports invalid amounts on submit */
+  }
   let cashChange = 0;
   try {
     cashChange =
@@ -700,7 +837,9 @@ function Checkout({
       (methods.find((m) => m.method === 'cash')
         ? parseDecimal(methods.find((m) => m.method === 'cash')!.amount)
         : 0);
-  } catch {}
+  } catch {
+    /* form validation reports invalid amounts on submit */
+  }
   return (
     <Modal title={pending ? 'Confirmar operación pendiente' : 'Cobrar venta'} onClose={onClose}>
       <form
@@ -730,6 +869,16 @@ function Checkout({
                 };
               }),
             };
+            saleSchema.parse(body);
+            saleTotals(
+              cart.map((i) => ({
+                id: i.product.id,
+                price_cents: i.product.price_cents,
+                qty_milli: i.qty_milli,
+                tax_rate_bps: i.product.tax_rate_bps ?? tenant.tax_rate_bps,
+              })),
+              d,
+            );
             if (body.payments.some((p) => !p.amount_cents))
               throw new Error('Los pagos deben ser mayores a cero.');
             if (sumMoney(body.payments.map((p) => p.amount_cents)) !== subtotal - d)
@@ -748,6 +897,7 @@ function Checkout({
             )}
           </strong>
           <span>{cart.length} productos · ARS</span>
+          {!pending && <small>Impuestos incluidos: {money(includedTax)}</small>}
         </div>
         {pending ? (
           <div className="alert warning">
@@ -770,7 +920,24 @@ function Checkout({
                 <Field label="Descuento en pesos">
                   <input
                     value={discount}
-                    onChange={(e) => setDiscount(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDiscount(value);
+                      if (methods.length === 1) {
+                        try {
+                          setMethods([
+                            {
+                              ...methods[0]!,
+                              amount: decimalInput(
+                                Math.max(0, subtotal - parseDecimal(value || '0')),
+                              ),
+                            },
+                          ]);
+                        } catch {
+                          /* keep last amount while editing */
+                        }
+                      }
+                    }}
                     inputMode="decimal"
                   />
                 </Field>

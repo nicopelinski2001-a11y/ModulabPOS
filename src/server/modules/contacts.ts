@@ -1,3 +1,4 @@
+import { command } from '../lib/commands.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { auth } from '../lib/auth.js';
@@ -93,50 +94,60 @@ export async function contactRoutes(app: FastifyInstance) {
       })
       .strict()
       .parse(req.body);
-    return withUser(user, async (db) => {
-      await lockOwnShift(db, user, b.shift_id);
-      requireFound(
-        (await db.query('SELECT id FROM customers WHERE id=$1 FOR UPDATE', [id])).rows[0],
-      );
-      const old = (
-        await db.query('SELECT * FROM customer_movements WHERE idempotency_key=$1', [
-          b.idempotency_key,
-        ])
-      ).rows[0];
-      if (old) {
-        if (
-          old.customer_id !== id ||
-          old.amount_cents !== -b.amount_cents ||
-          old.method !== b.method
-        )
-          throw new AppError(409, 'La clave de reintento tiene otros datos.');
-        return old;
-      }
-      const balance = (
-        await db.query(
-          'SELECT coalesce(sum(amount_cents),0)::bigint AS n FROM customer_movements WHERE customer_id=$1',
-          [id],
-        )
-      ).rows[0].n;
-      if (b.amount_cents > balance) throw new AppError(409, 'El pago supera la deuda del cliente.');
-      const {
-        rows: [row],
-      } = await db.query(
-        "INSERT INTO customer_movements(tenant_id,customer_id,user_id,amount_cents,kind,idempotency_key,method,reason) VALUES($1,$2,$3,$4,'payment',$5,$6,'Cobranza de cuenta corriente') RETURNING *",
-        [user.tenant_id, id, user.user_id, -b.amount_cents, b.idempotency_key, b.method],
-      );
-      if (b.method === 'cash')
-        await cashMovement(
-          db,
-          user,
-          b.shift_id,
-          b.amount_cents,
-          'collection',
-          row.id,
-          'Cobranza de cuenta corriente',
-        );
-      await audit(db, user, 'customer.payment', row.id, b);
-      return row;
-    });
+    return withUser(user, (db) =>
+      command(
+        db,
+        user,
+        b.idempotency_key,
+        'customer.payment',
+        { ...b, customer_id: id },
+        async () => {
+          await lockOwnShift(db, user, b.shift_id);
+          requireFound(
+            (await db.query('SELECT id FROM customers WHERE id=$1 FOR UPDATE', [id])).rows[0],
+          );
+          const old = (
+            await db.query('SELECT * FROM customer_movements WHERE idempotency_key=$1', [
+              b.idempotency_key,
+            ])
+          ).rows[0];
+          if (old) {
+            if (
+              old.customer_id !== id ||
+              old.amount_cents !== -b.amount_cents ||
+              old.method !== b.method
+            )
+              throw new AppError(409, 'La clave de reintento tiene otros datos.');
+            return old;
+          }
+          const balance = (
+            await db.query(
+              'SELECT coalesce(sum(amount_cents),0)::bigint AS n FROM customer_movements WHERE customer_id=$1',
+              [id],
+            )
+          ).rows[0].n;
+          if (b.amount_cents > balance)
+            throw new AppError(409, 'El pago supera la deuda del cliente.');
+          const {
+            rows: [row],
+          } = await db.query(
+            "INSERT INTO customer_movements(tenant_id,customer_id,user_id,amount_cents,kind,idempotency_key,method,reason) VALUES($1,$2,$3,$4,'payment',$5,$6,'Cobranza de cuenta corriente') RETURNING *",
+            [user.tenant_id, id, user.user_id, -b.amount_cents, b.idempotency_key, b.method],
+          );
+          if (b.method === 'cash')
+            await cashMovement(
+              db,
+              user,
+              b.shift_id,
+              b.amount_cents,
+              'collection',
+              row.id,
+              'Cobranza de cuenta corriente',
+            );
+          await audit(db, user, 'customer.payment', row.id, b);
+          return row;
+        },
+      ),
+    );
   });
 }

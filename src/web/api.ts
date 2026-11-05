@@ -45,7 +45,11 @@ export async function api<T = unknown>(
       502,
     );
   }
-  if (!res.ok) throw new ApiError(data.message ?? 'No se pudo completar la operación.', res.status);
+  if (!res.ok) {
+    if (res.status === 401 && !path.startsWith('/auth/'))
+      window.dispatchEvent(new Event('modulab-session-expired'));
+    throw new ApiError(data.message ?? 'No se pudo completar la operación.', res.status);
+  }
   return data as T;
 }
 export let notify: (message: string, kind?: 'success' | 'error') => void = () => {};
@@ -77,4 +81,31 @@ export function useAction() {
       }
     },
   };
+}
+
+export async function downloadFile(path: string, filename: string) {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      credentials: 'same-origin',
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch {
+    throw new ApiError(
+      'No se pudo descargar. Revisá la conexión al servidor e intentá de nuevo.',
+      0,
+    );
+  }
+  if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('modulab-session-expired'));
+    const error = await response.json().catch(() => ({}));
+    throw new ApiError(error.message ?? 'No se pudo descargar el archivo.', response.status);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }

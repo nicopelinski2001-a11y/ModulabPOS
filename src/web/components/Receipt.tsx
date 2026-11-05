@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { api, downloadFile, useAction } from '../api';
 import { browserPrinter } from './browser-printer';
 import { Printer, CheckCircle2 } from 'lucide-react';
 import { Modal, Button, dateTime } from './ui';
@@ -13,6 +15,9 @@ export function Receipt({
   onClose: () => void;
   success?: boolean;
 }) {
+  const action = useAction();
+  const [current, setCurrent] = useState(sale);
+  sale = current;
   const settings = sale.receipt_settings;
   return (
     <Modal title={success ? 'Venta completada' : 'Detalle de la operación'} onClose={onClose}>
@@ -70,6 +75,14 @@ export function Receipt({
               <strong>TOTAL</strong>
               <strong>{money(sale.total_cents)}</strong>
             </div>
+            <div>
+              <span>Neto sin impuesto</span>
+              <span>{money(sale.total_cents - (sale.tax_cents ?? 0))}</span>
+            </div>
+            <div>
+              <span>Impuestos incluidos</span>
+              <span>{money(sale.tax_cents ?? 0)}</span>
+            </div>
             {sale.payments?.map((p) => (
               <div key={p.method}>
                 <span>
@@ -87,15 +100,65 @@ export function Receipt({
             )}
           </div>
           <div className="receipt-rule" />
-          <p>¡Gracias por tu compra!</p>
+          <p>{settings.receipt_footer ?? '¡Gracias por tu compra!'}</p>
           <p className="receipt-brand">Modulab POS · Modulab Software</p>
         </article>
       </div>
+      {!sale.returned &&
+        sale.payments
+          ?.filter((p) => p.status === 'pending')
+          .map((p) => (
+            <form
+              className="form"
+              key={p.method}
+              onSubmit={(event) => {
+                event.preventDefault();
+                const reference = new FormData(event.currentTarget).get('reference');
+                void action.run(async () => {
+                  const updated = await api<Sale>(`/sales/${sale.id}/confirm-payment`, {
+                    method: p.method,
+                    reference,
+                  });
+                  setCurrent(updated);
+                  return true;
+                }, 'Acreditación registrada manualmente.');
+              }}
+            >
+              <label className="field">
+                <span>Referencia de acreditación · {paymentNames[p.method]}</span>
+                <input
+                  name="reference"
+                  minLength={5}
+                  maxLength={160}
+                  required
+                  placeholder="Número de operación verificado en tu banco"
+                />
+              </label>
+              <Button busy={action.busy} type="submit">
+                Confirmar acreditación manual
+              </Button>
+            </form>
+          ))}
       <div className="modal-actions">
         <Button variant="secondary" onClick={onClose}>
           Cerrar
         </Button>
-        <Button onClick={() => void browserPrinter.print({ paperWidth: settings.paper_width })}>
+        <Button
+          variant="secondary"
+          busy={action.busy}
+          onClick={() =>
+            void action.run(() =>
+              downloadFile(`/sales/${sale.id}/ticket.pdf`, `ticket-${sale.number}.pdf`),
+            )
+          }
+        >
+          Descargar PDF
+        </Button>
+        <Button
+          onClick={() =>
+            void action.run(() => browserPrinter.print({ paperWidth: settings.paper_width }))
+          }
+        >
           <Printer size={17} /> Imprimir ticket
         </Button>
       </div>

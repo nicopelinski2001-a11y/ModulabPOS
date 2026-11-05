@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, ArrowDownLeft, ArrowUpRight, LockKeyhole, Wallet, History } from 'lucide-react';
-import { api, notify, useAction } from '../api';
+import { api, notify, downloadFile, useAction } from '../api';
 import { useSession } from '../context';
 import {
   Button,
@@ -152,6 +152,34 @@ export function Cash() {
                             : money(s.counted_cents - s.expected_cents)}
                         </td>
                         <td>
+                          <Button
+                            variant="ghost"
+                            busy={action.busy}
+                            onClick={() =>
+                              void action.run(() =>
+                                downloadFile(
+                                  `/cash/shifts/${s.id}/report?format=pdf`,
+                                  `cierre-${s.id}.pdf`,
+                                ),
+                              )
+                            }
+                          >
+                            PDF
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            busy={action.busy}
+                            onClick={() =>
+                              void action.run(() =>
+                                downloadFile(
+                                  `/cash/shifts/${s.id}/report?format=csv`,
+                                  `cierre-${s.id}.csv`,
+                                ),
+                              )
+                            }
+                          >
+                            CSV
+                          </Button>
                           <Button variant="ghost" onClick={() => setSelected(s)}>
                             Movimientos
                           </Button>
@@ -235,7 +263,11 @@ export function Cash() {
                 let endpoint: string, body: unknown;
                 if (modal === 'open') {
                   endpoint = '/cash/open';
-                  body = { register_id: f.get('register_id'), opening_cents: amount };
+                  body = {
+                    register_id: f.get('register_id'),
+                    opening_cents: amount,
+                    idempotency_key: key,
+                  };
                 } else if (modal === 'close') {
                   endpoint = '/cash/close';
                   body = { shift_id: current!.id, counted_cents: amount, reason: f.get('reason') };

@@ -52,7 +52,7 @@ export async function authRoutes(app: FastifyInstance) {
       });
       reply.setCookie('modulab_session', token, {
         httpOnly: true,
-        secure: config.NODE_ENV === 'production',
+        secure: config.secureCookies,
         sameSite: 'strict',
         path: '/',
         maxAge: 8 * 60 * 60,
@@ -66,11 +66,18 @@ export async function authRoutes(app: FastifyInstance) {
       user,
       tenant: (
         await db.query(
-          'SELECT id,slug,name,address,tax_id,timezone,allow_negative_stock,paper_width FROM tenants',
+          'SELECT id,slug,name,address,tax_id,timezone,allow_negative_stock,paper_width,currency,tax_rate_bps,receipt_footer,session_idle_minutes FROM tenants',
         )
       ).rows[0],
       csrf: csrfToken(req.sessionToken!),
     }));
+  });
+  app.post('/api/auth/activity', async (req) => {
+    const user = auth(req);
+    await withUser(user, (db) =>
+      db.query('UPDATE sessions SET last_active_at=now() WHERE id=$1', [user.session_id]),
+    );
+    return { ok: true };
   });
   app.post('/api/auth/logout', async (req, reply) => {
     const user = auth(req);

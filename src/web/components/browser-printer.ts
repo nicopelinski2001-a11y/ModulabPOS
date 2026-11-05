@@ -4,6 +4,10 @@ export const browserPrinter: PrintAdapter = {
   silent: false,
   async print({ paperWidth }) {
     document.documentElement.dataset.paper = String(paperWidth);
-    window.print();
+    try {
+      window.print();
+    } finally {
+      delete document.documentElement.dataset.paper;
+    }
   },
 };

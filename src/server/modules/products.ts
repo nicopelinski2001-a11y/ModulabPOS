@@ -52,7 +52,7 @@ export async function productRoutes(app: FastifyInstance) {
       return {
         items: (
           await db.query(
-            `SELECT * FROM products ${where} ORDER BY (barcode=$1) DESC NULLS LAST,name LIMIT $4 OFFSET $5`,
+            `SELECT * FROM products ${where} ORDER BY (coalesce(barcode=$1,false) OR lower(sku)=lower($1)) DESC,name,id LIMIT $4 OFFSET $5`,
             args,
           )
         ).rows.map((p) => visibleProduct(user, p)),
@@ -177,31 +177,33 @@ export async function productRoutes(app: FastifyInstance) {
       })
       .strict()
       .parse(req.body);
-    return withUser(user, async (db) => {
-      const p = requireFound(
-        (await db.query('SELECT * FROM products WHERE id=$1 FOR UPDATE', [b.product_id])).rows[0],
-      );
-      if (p.unit === 'unit' && b.qty_milli % 1000 !== 0)
-        throw new AppError(400, 'Ingresá una cantidad entera.');
-      const existing = (
-        await db.query(
-          "SELECT * FROM inventory_movements WHERE kind='adjustment' AND reference_id=$1 AND product_id=$2",
-          [b.idempotency_key, b.product_id],
-        )
-      ).rows[0];
-      if (existing) {
-        if (existing.qty_milli !== b.qty_milli || existing.reason !== b.reason)
-          throw new AppError(409, 'La clave de reintento tiene otros datos.');
-        return existing;
-      }
-      const {
-        rows: [row],
-      } = await db.query(
-        "INSERT INTO inventory_movements(tenant_id,product_id,user_id,qty_milli,kind,reference_id,reason) VALUES($1,$2,$3,$4,'adjustment',$5,$6) RETURNING *",
-        [user.tenant_id, b.product_id, user.user_id, b.qty_milli, b.idempotency_key, b.reason],
-      );
-      await audit(db, user, 'inventory.adjust', row.id, b);
-      return row;
-    });
+    return withUser(user, (db) =>
+      command(db, user, b.idempotency_key, 'inventory.adjust', { ...b }, async () => {
+        const p = requireFound(
+          (await db.query('SELECT * FROM products WHERE id=$1 FOR UPDATE', [b.product_id])).rows[0],
+        );
+        if (p.unit === 'unit' && b.qty_milli % 1000 !== 0)
+          throw new AppError(400, 'Ingresá una cantidad entera.');
+        const existing = (
+          await db.query(
+            "SELECT * FROM inventory_movements WHERE kind='adjustment' AND reference_id=$1 AND product_id=$2",
+            [b.idempotency_key, b.product_id],
+          )
+        ).rows[0];
+        if (existing) {
+          if (existing.qty_milli !== b.qty_milli || existing.reason !== b.reason)
+            throw new AppError(409, 'La clave de reintento tiene otros datos.');
+          return existing;
+        }
+        const {
+          rows: [row],
+        } = await db.query(
+          "INSERT INTO inventory_movements(tenant_id,product_id,user_id,qty_milli,kind,reference_id,reason) VALUES($1,$2,$3,$4,'adjustment',$5,$6) RETURNING *",
+          [user.tenant_id, b.product_id, user.user_id, b.qty_milli, b.idempotency_key, b.reason],
+        );
+        await audit(db, user, 'inventory.adjust', row.id, b);
+        return row;
+      }),
+    );
   });
 }

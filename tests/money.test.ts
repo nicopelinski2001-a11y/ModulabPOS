@@ -7,7 +7,7 @@ import {
   saleSchema,
   can,
 } from '../src/shared/domain';
-import { parseCsv, downloadCsv } from '../src/web/csv';
+import { parseCsv } from '../src/web/csv';
 describe('Dinero exacto y cantidades', () => {
   it('interpreta centavos y milésimas sin usar coma flotante', () => {
     expect(parseDecimal('0,29')).toBe(29);
@@ -48,7 +48,7 @@ describe('Dinero exacto y cantidades', () => {
 describe('Archivos de migración', () => {
   it('interpreta separadores, escapes y saltos dentro de comillas', () => {
     expect(
-      parseCsv('\ufeffsku;nombre;precio\r\nA;"Alfajor; \"\"premium\"\"";1,20\r\nB;"Dos\nlíneas";2'),
+      parseCsv('\ufeffsku;nombre;precio\r\nA;"Alfajor; ""premium""";1,20\r\nB;"Dos\nlíneas";2'),
     ).toEqual([
       ['sku', 'nombre', 'precio'],
       ['A', 'Alfajor; "premium"', '1,20'],

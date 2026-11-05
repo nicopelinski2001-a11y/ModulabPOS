@@ -10,6 +10,14 @@ trap 'rm -f "$backup_partial"' EXIT
 pg_dump --format=custom --no-owner --no-acl --file="$backup_partial"
 pg_restore --list "$backup_partial" > /dev/null
 mv "$backup_partial" "$backup_file"
-sha256sum "$backup_file" > "$backup_file.sha256"
-# No eliminar automáticamente copias previas. La retención se configura según almacenamiento.
+(cd "$backup_dir" && sha256sum "$(basename "$backup_file")") > "$backup_file.sha256"
+# Retain forever unless explicitly configured. Keep at least seven days.
+if [[ -n "${BACKUP_RETENTION_DAYS:-}" ]]; then
+  if [[ ! "$BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]] || (( BACKUP_RETENTION_DAYS < 7 )); then
+    printf 'BACKUP_RETENTION_DAYS debe ser un entero >=7. No se eliminaron copias.\n' >&2
+    exit 1
+  fi
+  find "$backup_dir" -maxdepth 1 -type f -name 'modulab-*.dump*' -mtime "+$BACKUP_RETENTION_DAYS" -delete
+fi
+touch "$backup_dir/.last-success"
 printf 'Backup creado: %s\n' "$backup_file"

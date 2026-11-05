@@ -58,7 +58,9 @@ export function Purchases() {
         .filter((l) => l.cost && l.quantity)
         .map((l) => lineTotal(parseDecimal(l.cost), parseDecimal(l.quantity, 3))),
     );
-  } catch {}
+  } catch {
+    /* validate amounts on submission */
+  }
   return (
     <>
       <PageTitle

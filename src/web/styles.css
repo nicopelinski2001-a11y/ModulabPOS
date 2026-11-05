@@ -2606,3 +2606,38 @@ th {
     font-size: 11px;
   }
 }
+
+.connection-status {
+  padding: 6px 24px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+}
+.connection-status.disconnected {
+  background: #fff0d4;
+  color: #6f4000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+@media (pointer: coarse) {
+  button,
+  .button,
+  input,
+  select {
+    min-height: 44px;
+  }
+  .quantity-control button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .category-tabs button {
+    min-height: 44px;
+  }
+}
+@media print {
+  .connection-status {
+    display: none;
+  }
+}

@@ -4,6 +4,6 @@ export const paymentNames: Record<(typeof paymentMethods)[number], string> = {
   transfer: 'Transferencia',
   debit: 'Débito',
   credit: 'Crédito',
-  wallet: 'Billetera virtual',
+  wallet: 'QR / billetera virtual',
   account: 'Cuenta corriente',
 };

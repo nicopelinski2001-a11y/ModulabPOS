@@ -1,3 +1,4 @@
+import { command } from '../lib/commands.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { auth } from '../lib/auth.js';
@@ -119,52 +120,62 @@ export async function purchaseRoutes(app: FastifyInstance) {
       })
       .strict()
       .parse(req.body);
-    return withUser(user, async (db) => {
-      await lockOwnShift(db, user, b.shift_id);
-      const purchase = requireFound(
-        (await db.query('SELECT * FROM purchases WHERE id=$1 FOR UPDATE', [id])).rows[0],
-      );
-      if (purchase.status !== 'received') throw new AppError(409, 'Primero confirmá la recepción.');
-      const old = (
-        await db.query('SELECT * FROM supplier_payments WHERE idempotency_key=$1', [
-          b.idempotency_key,
-        ])
-      ).rows[0];
-      if (old) {
-        if (
-          old.purchase_id !== id ||
-          old.amount_cents !== b.amount_cents ||
-          old.method !== b.method
-        )
-          throw new AppError(409, 'La clave de reintento tiene otros datos.');
-        return old;
-      }
-      const paid = (
-        await db.query(
-          'SELECT coalesce(sum(amount_cents),0)::bigint AS n FROM supplier_payments WHERE purchase_id=$1',
-          [id],
-        )
-      ).rows[0].n;
-      if (paid + b.amount_cents > purchase.total_cents)
-        throw new AppError(409, 'El pago supera el saldo pendiente.');
-      const {
-        rows: [row],
-      } = await db.query(
-        'INSERT INTO supplier_payments(tenant_id,purchase_id,user_id,idempotency_key,amount_cents,method) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-        [user.tenant_id, id, user.user_id, b.idempotency_key, b.amount_cents, b.method],
-      );
-      if (b.method === 'cash')
-        await cashMovement(
-          db,
-          user,
-          b.shift_id,
-          -b.amount_cents,
-          'supplier_payment',
-          row.id,
-          'Pago a proveedor',
-        );
-      await audit(db, user, 'purchase.payment', row.id, b);
-      return row;
-    });
+    return withUser(user, (db) =>
+      command(
+        db,
+        user,
+        b.idempotency_key,
+        'purchase.payment',
+        { ...b, purchase_id: id },
+        async () => {
+          await lockOwnShift(db, user, b.shift_id);
+          const purchase = requireFound(
+            (await db.query('SELECT * FROM purchases WHERE id=$1 FOR UPDATE', [id])).rows[0],
+          );
+          if (purchase.status !== 'received')
+            throw new AppError(409, 'Primero confirmá la recepción.');
+          const old = (
+            await db.query('SELECT * FROM supplier_payments WHERE idempotency_key=$1', [
+              b.idempotency_key,
+            ])
+          ).rows[0];
+          if (old) {
+            if (
+              old.purchase_id !== id ||
+              old.amount_cents !== b.amount_cents ||
+              old.method !== b.method
+            )
+              throw new AppError(409, 'La clave de reintento tiene otros datos.');
+            return old;
+          }
+          const paid = (
+            await db.query(
+              'SELECT coalesce(sum(amount_cents),0)::bigint AS n FROM supplier_payments WHERE purchase_id=$1',
+              [id],
+            )
+          ).rows[0].n;
+          if (paid + b.amount_cents > purchase.total_cents)
+            throw new AppError(409, 'El pago supera el saldo pendiente.');
+          const {
+            rows: [row],
+          } = await db.query(
+            'INSERT INTO supplier_payments(tenant_id,purchase_id,user_id,idempotency_key,amount_cents,method) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
+            [user.tenant_id, id, user.user_id, b.idempotency_key, b.amount_cents, b.method],
+          );
+          if (b.method === 'cash')
+            await cashMovement(
+              db,
+              user,
+              b.shift_id,
+              -b.amount_cents,
+              'supplier_payment',
+              row.id,
+              'Pago a proveedor',
+            );
+          await audit(db, user, 'purchase.payment', row.id, b);
+          return row;
+        },
+      ),
+    );
   });
 }
