@@ -1,0 +1,75 @@
+name: modulab-pos
+services:
+  db:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: modulab_admin
+      POSTGRES_DB: modulab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definí POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U modulab_admin -d modulab']
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  migrate:
+    build: { context: ., target: tooling }
+    command: [scripts/migrate.ts]
+    environment:
+      ADMIN_DATABASE_URL: postgresql://modulab_admin:${POSTGRES_PASSWORD}@db:5432/modulab
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?Definí APP_DATABASE_PASSWORD}
+    depends_on:
+      db: { condition: service_healthy }
+    restart: 'no'
+  app:
+    build: { context: ., target: runtime }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://modulab_app:${APP_DATABASE_PASSWORD}@db:5432/modulab
+      SESSION_SECRET: ${SESSION_SECRET:?Definí SESSION_SECRET}
+      APP_ORIGIN: ${APP_ORIGIN:?Definí APP_ORIGIN con HTTPS}
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+    ports: ['127.0.0.1:3001:3001']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  backup:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: modulab_admin
+      PGDATABASE: modulab
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_DIR: /backups
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+      - backups:/backups
+    entrypoint: ['bash', '-c', 'while true; do bash /backup.sh; sleep 86400; done']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  proxy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+volumes:
+  postgres_data:
+  backups:
+  caddy_data:
+  caddy_config:
